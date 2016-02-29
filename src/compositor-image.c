@@ -257,7 +257,7 @@ image_frame_buffer_open(struct image_output *output, const char *fb_dev,
 	weston_log("Opening image frame buffer.\n");
 
 	/* Open the frame buffer device. */
-	fd = open(fb_dev, O_RDWR | O_CLOEXEC);
+	fd = open(fb_dev, O_RDWR | O_CLOEXEC | O_CREAT);
 	if (fd < 0) {
 		weston_log("Failed to open frame buffer device ‘%s’: %s\n",
 		           fb_dev, strerror(errno));
