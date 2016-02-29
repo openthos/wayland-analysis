@@ -94,7 +94,6 @@ struct image_output {
 };
 
 struct image_parameters {
-	int tty;
 	char *device;
 	int use_gl;
 };
@@ -654,7 +653,7 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	wl_signal_add(&compositor->session_signal,
 		      &backend->session_listener);
 	compositor->launcher =
-		weston_launcher_connect(compositor, param->tty, "seat0", false);
+		weston_launcher_connect(compositor, /* uselses */ 0, "seat0", false);
 	if (!compositor->launcher) {
 		weston_log("fatal: image backend should be run "
 			   "using weston-launch binary or as root\n");
@@ -719,13 +718,11 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 	/* TODO: Ideally, available frame buffers should be enumerated using
 	 * udev, rather than passing a device node in as a parameter. */
 	struct image_parameters param = {
-		.tty = 0, /* default to current tty */
 		.device = "/tmp/image.ppm", /* default frame buffer */
 		.use_gl = 0,
 	};
 
 	const struct weston_option image_options[] = {
-		{ WESTON_OPTION_INTEGER, "tty", 0, &param.tty },
 		{ WESTON_OPTION_STRING, "device", 0, &param.device },
 		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &param.use_gl },
 	};
