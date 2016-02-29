@@ -720,7 +720,7 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 	 * udev, rather than passing a device node in as a parameter. */
 	struct image_parameters param = {
 		.tty = 0, /* default to current tty */
-		.device = "/dev/fb0", /* default frame buffer */
+		.device = "/tmp/image.ppm", /* default frame buffer */
 		.use_gl = 0,
 	};
 
