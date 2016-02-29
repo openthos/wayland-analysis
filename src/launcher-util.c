@@ -36,9 +36,9 @@
 
 static struct launcher_interface *ifaces[] = {
 #ifdef HAVE_SYSTEMD_LOGIN
-	&launcher_logind_iface,
+//	&launcher_logind_iface,
 #endif
-	&launcher_weston_launch_iface,
+//	&launcher_weston_launch_iface,
 	&launcher_direct_iface,
 	NULL,
 };
