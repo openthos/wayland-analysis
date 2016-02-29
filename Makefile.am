@@ -376,6 +376,27 @@ fbdev_backend_la_SOURCES =			\
 	$(INPUT_BACKEND_SOURCES)
 endif
 
+if ENABLE_IMAGE_COMPOSITOR
+module_LTLIBRARIES += image-backend.la
+image_backend_la_LDFLAGS = -module -avoid-version
+image_backend_la_LIBADD =			\
+	$(COMPOSITOR_LIBS)			\
+	$(IMAGE_COMPOSITOR_LIBS)		\
+	$(INPUT_BACKEND_LIBS)			\
+	libsession-helper.la			\
+	libshared.la
+image_backend_la_CFLAGS =			\
+	$(COMPOSITOR_CFLAGS)			\
+	$(EGL_CFLAGS)				\
+	$(FBDEV_COMPOSITOR_CFLAGS)		\
+	$(PIXMAN_CFLAGS)			\
+	$(AM_CFLAGS)
+image_backend_la_SOURCES =			\
+	src/compositor-image.c			\
+	shared/helpers.h			\
+	$(INPUT_BACKEND_SOURCES)
+endif
+
 if ENABLE_RDP_COMPOSITOR
 module_LTLIBRARIES += rdp-backend.la
 rdp_backend_la_LDFLAGS = -module -avoid-version
