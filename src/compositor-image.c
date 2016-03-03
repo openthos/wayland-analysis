@@ -191,13 +191,13 @@ image_query_screen_info(struct image_output *output, int fd,
 	info->y_resolution = 600;
 	info->width_mm = 800;
 	info->height_mm = 600;
-	info->bits_per_pixel = 24;
+	info->bits_per_pixel = 32;
 
 	info->buffer_length = 5763072;
 	info->line_length = info->width_mm * (info->bits_per_pixel / 8);
         strcpy(info->id, "imagescreen");
 
-	info->pixel_format = PIXMAN_r8g8b8;
+	info->pixel_format = PIXMAN_a8r8g8b8;
 	info->refresh_rate = 60000;
 
 	return 1;
@@ -718,7 +718,7 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 	/* TODO: Ideally, available frame buffers should be enumerated using
 	 * udev, rather than passing a device node in as a parameter. */
 	struct image_parameters param = {
-		.device = "/tmp/image.ppm", /* default frame buffer */
+		.device = "/tmp/image.bin", /* default frame buffer */
 		.use_gl = 0,
 	};
 
