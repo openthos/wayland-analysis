@@ -664,6 +664,7 @@ AC_MSG_RESULT([
 	systemd-login support		${have_systemd_login}
 	systemd notify support		${enable_systemd_notify}
 
+	IMAGE Compositor		${enable_image_compositor}
 	DRM Compositor			${enable_drm_compositor}
 	X11 Compositor			${enable_x11_compositor}
 	Wayland Compositor		${enable_wayland_compositor}
