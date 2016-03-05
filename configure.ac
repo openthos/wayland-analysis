@@ -109,7 +109,7 @@ AM_CONDITIONAL(ENABLE_SETUID_INSTALL, test x$enable_setuid_install = xyes)
 
 
 AC_ARG_ENABLE(xwayland, [  --enable-xwayland],,
-	      enable_xwayland=yes)
+	      enable_xwayland=no)
 AC_ARG_ENABLE(xwayland-test, [  --enable-xwayland-test],,
               enable_xwayland_test=yes)
 AM_CONDITIONAL(ENABLE_XWAYLAND, test x$enable_xwayland = xyes)
@@ -131,7 +131,7 @@ PKG_CHECK_MODULES(LIBDRM, [libdrm],
                   [AC_DEFINE(HAVE_LIBDRM, 1, [Define if libdrm is available]) have_libdrm=yes], have_libdrm=no)
 
 AC_ARG_ENABLE(x11-compositor, [  --enable-x11-compositor],,
-	      enable_x11_compositor=yes)
+	      enable_x11_compositor=no)
 AM_CONDITIONAL(ENABLE_X11_COMPOSITOR, test x$enable_x11_compositor = xyes)
 if test x$enable_x11_compositor = xyes; then
   PKG_CHECK_MODULES([XCB], xcb)
@@ -167,7 +167,7 @@ fi
 
 
 AC_ARG_ENABLE(drm-compositor, [  --enable-drm-compositor],,
-	      enable_drm_compositor=yes)
+	      enable_drm_compositor=no)
 AM_CONDITIONAL(ENABLE_DRM_COMPOSITOR, test x$enable_drm_compositor = xyes)
 if test x$enable_drm_compositor = xyes; then
   AC_DEFINE([BUILD_DRM_COMPOSITOR], [1], [Build the DRM compositor])
@@ -178,7 +178,7 @@ if test x$enable_drm_compositor = xyes; then
 fi
 
 
-PKG_CHECK_MODULES(LIBINPUT_BACKEND, [libinput >= 0.8.0])
+#PKG_CHECK_MODULES(LIBINPUT_BACKEND, [libinput >= 0.8.0])
 PKG_CHECK_MODULES(COMPOSITOR, [$COMPOSITOR_MODULES])
 
 PKG_CHECK_MODULES(WAYLAND_PROTOCOLS, [wayland-protocols >= 1.0],
@@ -186,7 +186,7 @@ PKG_CHECK_MODULES(WAYLAND_PROTOCOLS, [wayland-protocols >= 1.0],
 AC_SUBST(WAYLAND_PROTOCOLS_DATADIR, $ac_wayland_protocols_pkgdatadir)
 
 AC_ARG_ENABLE(wayland-compositor, [  --enable-wayland-compositor],,
-	      enable_wayland_compositor=yes)
+	      enable_wayland_compositor=no)
 AM_CONDITIONAL(ENABLE_WAYLAND_COMPOSITOR,
 	       test x$enable_wayland_compositor = xyes -a x$enable_egl = xyes)
 if test x$enable_wayland_compositor = xyes -a x$enable_egl = xyes; then
@@ -208,7 +208,7 @@ fi
 AC_ARG_ENABLE(rpi-compositor,
 	      AS_HELP_STRING([--disable-rpi-compositor],
 	                     [do not build the Raspberry Pi backend]),,
-	      enable_rpi_compositor=yes)
+	      enable_rpi_compositor=no)
 AM_CONDITIONAL(ENABLE_RPI_COMPOSITOR, test "x$enable_rpi_compositor" = "xyes")
 have_bcm_host="no"
 if test "x$enable_rpi_compositor" = "xyes"; then
@@ -223,7 +223,7 @@ AM_CONDITIONAL(INSTALL_RPI_COMPOSITOR, test "x$have_bcm_host" = "xyes")
 
 
 AC_ARG_ENABLE([fbdev-compositor], [  --enable-fbdev-compositor],,
-              enable_fbdev_compositor=yes)
+              enable_fbdev_compositor=no)
 AM_CONDITIONAL([ENABLE_FBDEV_COMPOSITOR],
                [test x$enable_fbdev_compositor = xyes])
 AS_IF([test x$enable_fbdev_compositor = xyes], [
@@ -409,7 +409,7 @@ AS_IF([test "x$enable_resize_optimization" = "xyes"],
 AC_ARG_ENABLE(systemd-login,
               AS_HELP_STRING([--enable-systemd-login],
                              [Enable logind support]),,
-              enable_systemd_login=auto)
+              enable_systemd_login=no)
 if test x$enable_systemd_login != xno; then
   PKG_CHECK_MODULES(SYSTEMD_LOGIN,
                     [libsystemd >= 209],
@@ -438,7 +438,7 @@ AM_CONDITIONAL(HAVE_SYSTEMD_LOGIN, test "x$have_systemd_login" = "xyes")
 AS_IF([test "x$have_systemd_login_209" = "xyes"],
       [AC_DEFINE([HAVE_SYSTEMD_LOGIN_209], [1], [Have systemd-login >= 209])])
 
-AC_ARG_ENABLE(weston-launch, [  --enable-weston-launch],, enable_weston_launch=yes)
+AC_ARG_ENABLE(weston-launch, [  --enable-weston-launch],, enable_weston_launch=no)
 AM_CONDITIONAL(BUILD_WESTON_LAUNCH, test x$enable_weston_launch == xyes)
 if test x$enable_weston_launch == xyes; then
   AC_CHECK_LIB([pam], [pam_open_session], [have_pam=yes], [have_pam=no])
@@ -465,7 +465,7 @@ AM_CONDITIONAL(ENABLE_DESKTOP_SHELL, true)
 AC_ARG_ENABLE(fullscreen-shell,
               AS_HELP_STRING([--disable-fullscreen-shell],
                              [do not build fullscreen-shell server plugin]),,
-	      enable_fullscreen_shell=yes)
+	      enable_fullscreen_shell=no)
 AM_CONDITIONAL(ENABLE_FULLSCREEN_SHELL,
 	       test "x$enable_fullscreen_shell" = "xyes")
 
@@ -473,7 +473,7 @@ AM_CONDITIONAL(ENABLE_FULLSCREEN_SHELL,
 AC_ARG_ENABLE(colord,
               AS_HELP_STRING([--disable-colord],
                              [do not build colord CMS support]),,
-	      enable_colord=auto)
+	      enable_colord=no)
 if test "x$enable_colord" != "xno"; then
 	PKG_CHECK_MODULES(COLORD,
 			  colord >= 0.1.27,
@@ -492,7 +492,7 @@ AM_CONDITIONAL(ENABLE_COLORD, test "x$enable_colord" = "xyes")
 AC_ARG_ENABLE(dbus,
               AS_HELP_STRING([--disable-dbus],
                              [do not build with dbus support]),,
-              enable_dbus=auto)
+              enable_dbus=no)
 if test "x$enable_dbus" != "xno"; then
         PKG_CHECK_MODULES(DBUS,
                           dbus-1 >= 1.6,
@@ -516,7 +516,7 @@ AM_CONDITIONAL(ENABLE_DBUS, test "x$enable_dbus" = "xyes")
 AC_ARG_ENABLE(junit_xml,
 	      AS_HELP_STRING([--disable-junit-xml],
 			     [do not build with JUnit XML output]),,
-	      enable_junit_xml=auto)
+	      enable_junit_xml=no)
 if test "x$enable_junit_xml" != "xno"; then
 	PKG_CHECK_MODULES(LIBXML2,
 			  [libxml-2.0 >= 2.6],
@@ -538,10 +538,10 @@ AM_CONDITIONAL(ENABLE_JUNIT_XML, test "x$enable_junit_xml" = "xyes")
 AC_ARG_ENABLE(ivi-shell,
               AS_HELP_STRING([--disable-ivi-shell],
                              [do not build ivi-shell server plugin and client]),,
-	      enable_ivi_shell=yes)
+	      enable_ivi_shell=no)
 AM_CONDITIONAL(ENABLE_IVI_SHELL, test "x$enable_ivi_shell" = "xyes")
 
-AC_ARG_ENABLE(wcap-tools, [  --disable-wcap-tools],, enable_wcap_tools=yes)
+AC_ARG_ENABLE(wcap-tools, [  --disable-wcap-tools],, enable_wcap_tools=no)
 AM_CONDITIONAL(BUILD_WCAP_TOOLS, test x$enable_wcap_tools = xyes)
 if test x$enable_wcap_tools = xyes; then
   AC_DEFINE([BUILD_WCAP_TOOLS], [1], [Build the wcap tools])
@@ -562,7 +562,7 @@ AC_SUBST(GCC_CFLAGS)
 AC_ARG_ENABLE(libunwind,
               AS_HELP_STRING([--disable-libunwind],
                              [Disable libunwind usage for backtraces]),,
-              enable_libunwind=auto)
+              enable_libunwind=no)
 AM_CONDITIONAL(HAVE_LIBUNWIND, [test "x$enable_libunwind" = xyes])
 if test "x$enable_libunwind" != "xno"; then
         PKG_CHECK_MODULES(LIBUNWIND,
@@ -602,7 +602,7 @@ AM_CONDITIONAL(INSTALL_DEMO_CLIENTS, [test "x$enable_demo_clients_install" = "xy
 AC_ARG_ENABLE(lcms,
               AS_HELP_STRING([--disable-lcms],
                              [Disable lcms support]),,
-              enable_lcms=auto)
+              enable_lcms=no)
 if test "x$enable_lcms" != "xno"; then
         PKG_CHECK_MODULES(LCMS,
                           lcms2,
