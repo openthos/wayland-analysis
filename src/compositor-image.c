@@ -55,8 +55,7 @@ struct image_backend {
 	struct weston_compositor *compositor;
 	uint32_t prev_state;
 
-	struct udev *udev;
-	struct udev_input input;
+    struct weston_seat fake_seat;
 	int use_pixman;
 	struct wl_listener session_listener;
 };
@@ -558,12 +557,14 @@ image_output_disable(struct weston_output *base)
 	image_frame_buffer_destroy(output);
 }
 
+static void image_input_destroy(struct image_backend *b);
+
 static void
 image_backend_destroy(struct weston_compositor *base)
 {
 	struct image_backend *backend = to_image_backend(base);
 
-	udev_input_destroy(&backend->input);
+	image_input_destroy(backend);
 
 	/* Destroy the output. */
 	weston_compositor_shutdown(base);
@@ -591,10 +592,10 @@ session_notify(struct wl_listener *listener, void *data)
 
 		weston_compositor_damage_all(compositor);
 
-		udev_input_enable(&backend->input);
+		// udev_input_enable(backend);
 	} else {
 		weston_log("leaving VT\n");
-		udev_input_disable(&backend->input);
+		// udev_input_disable(backend);
 
 		wl_list_for_each(output, &compositor->output_list, link) {
 			image_output_disable(output);
@@ -615,6 +616,25 @@ session_notify(struct wl_listener *listener, void *data)
 			output->repaint_needed = 0;
 		}
 	}
+}
+
+static int
+image_input_create(struct image_backend *b, const char *seat_id)
+{
+	weston_seat_init(&b->fake_seat, b->compositor, "default");
+
+	weston_seat_init_pointer(&b->fake_seat);
+
+	if (weston_seat_init_keyboard(&b->fake_seat, NULL) < 0)
+		return -1;
+
+	return 0;
+}
+
+static void
+image_input_destroy(struct image_backend *b)
+{
+	weston_seat_release(&b->fake_seat);
 }
 
 static void
@@ -642,12 +662,6 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 							compositor) < 0)
 		goto out_compositor;
 
-	backend->udev = udev_new();
-	if (backend->udev == NULL) {
-		weston_log("Failed to initialize udev context.\n");
-		goto out_compositor;
-	}
-
 	/* Set up the TTY. */
 	backend->session_listener.notify = session_notify;
 	wl_signal_add(&compositor->session_signal,
@@ -657,7 +671,7 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	if (!compositor->launcher) {
 		weston_log("fatal: image backend should be run "
 			   "using weston-launch binary or as root\n");
-		goto out_udev;
+		goto out_compositor;
 	}
 
 	backend->base.destroy = image_backend_destroy;
@@ -691,16 +705,13 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	if (image_output_create(backend, param->device) < 0)
 		goto out_launcher;
 
-	udev_input_init(&backend->input, compositor, backend->udev, seat_id);
+    image_input_create(backend, seat_id);
 
 	compositor->backend = &backend->base;
 	return backend;
 
 out_launcher:
 	weston_launcher_destroy(compositor->launcher);
-
-out_udev:
-	udev_unref(backend->udev);
 
 out_compositor:
 	weston_compositor_shutdown(compositor);
