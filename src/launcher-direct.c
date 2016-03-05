@@ -91,6 +91,7 @@ launcher_direct_open(struct weston_launcher *launcher_base, const char *path, in
 	struct stat s;
 	int fd;
 
+    weston_log("Try to open %s\n", path);
 	fd = open(path, flags | O_CLOEXEC);
 	if (fd == -1)
 		return -1;
@@ -108,6 +109,8 @@ launcher_direct_open(struct weston_launcher *launcher_base, const char *path, in
 			return -1;
 		}
 	}
+
+    weston_log("Success open %s\n", path);
 
 	return fd;
 }
@@ -137,8 +140,9 @@ launcher_direct_connect(struct weston_launcher **out, struct weston_compositor *
 {
 	struct launcher_direct *launcher;
 
-	if (geteuid() != 0)
-		return -EINVAL;
+    weston_log("geteuid: %d\n", geteuid);
+//	if (geteuid() != 0)
+//		return -EINVAL;
 
 	launcher = zalloc(sizeof(*launcher));
 	if (launcher == NULL)
