@@ -237,7 +237,6 @@ AM_CONDITIONAL([ENABLE_IMAGE_COMPOSITOR],
                [test x$enable_image_compositor = xyes])
 AS_IF([test x$enable_image_compositor = xyes], [
   AC_DEFINE([BUILD_IMAGE_COMPOSITOR], [1], [Build the image compositor])
-  PKG_CHECK_MODULES([IMAGE_COMPOSITOR], [libudev >= 136 mtdev >= 1.1.0])
 ])
 
 AC_ARG_ENABLE([rdp-compositor], [  --enable-rdp-compositor],,
