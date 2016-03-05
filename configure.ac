@@ -580,7 +580,7 @@ fi
 
 
 if test "x$WESTON_NATIVE_BACKEND" = "x"; then
-	WESTON_NATIVE_BACKEND="drm-backend.so"
+	WESTON_NATIVE_BACKEND="image-backend.so"
 fi
 AC_MSG_NOTICE([Weston's native backend: $WESTON_NATIVE_BACKEND])
 AC_DEFINE_UNQUOTED([WESTON_NATIVE_BACKEND], ["$WESTON_NATIVE_BACKEND"],
