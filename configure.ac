@@ -596,7 +596,7 @@ AC_DEFINE_UNQUOTED([WESTON_SHELL_CLIENT], ["$WESTON_SHELL_CLIENT"],
 AC_ARG_ENABLE(demo-clients-install,
               AS_HELP_STRING([--enable-demo-clients-install],
                              [Install demo clients built with weston]),,
-			     enable_demo_clients_install=no)
+			     enable_demo_clients_install=yes)
 AM_CONDITIONAL(INSTALL_DEMO_CLIENTS, [test "x$enable_demo_clients_install" = "xyes"])
 
 AC_ARG_ENABLE(lcms,
