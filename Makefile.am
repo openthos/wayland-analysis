@@ -377,11 +377,16 @@ fbdev_backend_la_SOURCES =			\
 endif
 
 if ENABLE_IMAGE_COMPOSITOR
+
+SOCKET_INPUT_SOURCES =				\
+	src/socket-input.c				\
+	src/socket-local-server.c
+
 module_LTLIBRARIES += image-backend.la
 image_backend_la_LDFLAGS = -module -avoid-version
 image_backend_la_LIBADD = $(COMPOSITOR_LIBS) libsession-helper.la libshared.la
 image_backend_la_CFLAGS = $(COMPOSITOR_CFLAGS) $(PIXMAN_CFLAGS) $(AM_CFLAGS)
-image_backend_la_SOURCES = src/compositor-image.c shared/helpers.h
+image_backend_la_SOURCES = src/compositor-image.c shared/helpers.h $(SOCKET_INPUT_SOURCES)
 endif
 
 if ENABLE_RDP_COMPOSITOR

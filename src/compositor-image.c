@@ -49,6 +49,7 @@
 #include "libinput-seat.h"
 #include "gl-renderer.h"
 #include "presentation_timing-server-protocol.h"
+#include "socket-input.h"
 
 struct image_backend {
 	struct weston_backend base;
@@ -56,6 +57,7 @@ struct image_backend {
 	uint32_t prev_state;
 
     struct weston_seat fake_seat;
+	struct socket_input input;
 	int use_pixman;
 	struct wl_listener session_listener;
 };
@@ -557,14 +559,14 @@ image_output_disable(struct weston_output *base)
 	image_frame_buffer_destroy(output);
 }
 
-static void image_input_destroy(struct image_backend *b);
+static void socket_input_destroy(struct image_backend *b);
 
 static void
 image_backend_destroy(struct weston_compositor *base)
 {
 	struct image_backend *backend = to_image_backend(base);
 
-	image_input_destroy(backend);
+	socket_input_destroy(backend);
 
 	/* Destroy the output. */
 	weston_compositor_shutdown(base);
@@ -618,21 +620,8 @@ session_notify(struct wl_listener *listener, void *data)
 	}
 }
 
-static int
-image_input_create(struct image_backend *b, const char *seat_id)
-{
-	weston_seat_init(&b->fake_seat, b->compositor, "default");
-
-	weston_seat_init_pointer(&b->fake_seat);
-
-	if (weston_seat_init_keyboard(&b->fake_seat, NULL) < 0)
-		return -1;
-
-	return 0;
-}
-
 static void
-image_input_destroy(struct image_backend *b)
+socket_input_destroy(struct image_backend *b)
 {
 	weston_seat_release(&b->fake_seat);
 }
@@ -705,7 +694,7 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	if (image_output_create(backend, param->device) < 0)
 		goto out_launcher;
 
-    image_input_create(backend, seat_id);
+    socket_input_init(&backend->socket_input, compositor, seat_id);
 
 	compositor->backend = &backend->base;
 	return backend;
