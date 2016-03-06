@@ -694,7 +694,7 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	if (image_output_create(backend, param->device) < 0)
 		goto out_launcher;
 
-    socket_input_init(&backend->socket_input, compositor, seat_id);
+    socket_input_init(&backend->input, compositor, seat_id);
 
 	compositor->backend = &backend->base;
 	return backend;
