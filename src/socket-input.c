@@ -13,9 +13,8 @@
 #define SERVER_HELLO "ServerHello"
 #define CLIENT_HELLO "ClientHello"
 
-static void handle_event_proto(const char *buf, size_t data_length) {
-    weston_log("handle_event_proto not implemented\n");
-}
+// proto-helpers.c
+void handle_event_proto(const socket_input* input, const char *buf, size_t data_length);
 
 static int recv_len(int fd, char *buf, size_t data_length) {
     size_t total_read = 0;
@@ -57,6 +56,7 @@ static int send_msg(int fd, const char *buf, size_t len) {
 static int
 socket_input_dispatch(int fd, uint32_t mask, void *data)
 {
+	struct socket_input *input = data;
     uint32_t data_length;
     char *buf;
 
@@ -89,7 +89,7 @@ socket_input_dispatch(int fd, uint32_t mask, void *data)
     }
 
     weston_log("process input event\n");
-    handle_event_proto(buf, data_length);
+    handle_event_proto(input, buf, data_length);
     free(buf);
     return 0;
 }
@@ -114,6 +114,59 @@ socket_input_source_dispatch(int fd, uint32_t mask, void *data)
     return 0;
 }
 
+static const char default_seat_name[] = "default";
+
+static void
+socket_input_led_update(struct weston_seat *seat, enum weston_led weston_leds) {
+    weston_log("socket_input_led_update not implemented\n");
+}
+
+static void
+socket_input_notify_output_create(struct wl_listener *listener, void *data)
+{
+	struct socket_input_seat *seat = container_of(listener, struct socket_input_seat,
+					      output_create_listener);
+	struct weston_output *output = data;
+
+    //seat->output = data;
+}
+
+
+static int
+socket_input_seat_init(struct socket_input *input, const char *seat_id) {
+	struct weston_compositor *c = input->compositor;
+	struct socket_input_seat *seat = input->seat;
+	struct weston_seat *seat_base;
+	struct weston_pointer *pointer;
+
+	seat = zalloc(sizeof *seat);
+	if (!seat)
+		return NULL;
+    seat_base = &(seat->base);
+
+	weston_seat_init(&seat, c, default_seat_name);
+	seat_base->led_update = socket_input_led_update;
+
+	seat->output_create_listener.notify = socket_input_notify_output_create;
+	wl_signal_add(&c->output_created_signal,
+		      &seat->output_create_listener);
+
+    weston_seat_init_keyboard(seat, NULL);
+    weston_seat_init_pointer(seat);
+    weston_seat_init_touch(seat);
+
+	pointer = weston_seat_get_pointer(seat_base);
+	if (seat_base->output && pointer)
+		weston_pointer_clamp(pointer,
+				     &pointer->x,
+				     &pointer->y);
+
+	//if (!input->suspended)
+    weston_seat_repick(seat_base);
+
+	return seat;
+}
+
 
 int socket_input_init(struct socket_input *input, struct weston_compositor *c,
         const char *seat_id)
@@ -134,7 +187,7 @@ int socket_input_init(struct socket_input *input, struct weston_compositor *c,
 
     weston_log("Socket input listen on %s\n", SOCKET_PATH);
 
-    input->seat_id = strdup(seat_id);
+    socket_input_seat_init(input, c, seat_id);
 
 	loop = wl_display_get_event_loop(c->wl_display);
 	input->event_source =
