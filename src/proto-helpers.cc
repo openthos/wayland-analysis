@@ -14,9 +14,9 @@ void handle_key_event(const socket_input *input, const InputEventProto &inputEve
         weston_log("no KeyEvent in InputEventProto\n");
         return;
     }
-    const KeyEvent &keyEvent = inputEvent.keyEvent();
+    const KeyEvent &keyEvent = inputEvent.key_event();
     weston_seat *seat = &(input->seat->base);
-    switch (motionEvent.action_type()) {
+    switch (keyEvent.action_type()) {
         case KeyEvent::ACTION_DOWN:
           notify_key(seat,
                      inputEvent.time(),
@@ -44,13 +44,17 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
         return;
     }
     const MotionEvent &motionEvent = inputEvent.motion_event();
+
     weston_seat *seat = &(input->seat->base);
+
     switch (motionEvent.action_type()) {
         case MotionEvent::ACTION_HOVER_MOVE:
+          wl_fixed_t wl_x, wl_y;
+          wl_x = wl_fixed_from_int((int)motionEvent.x());
+          wl_y = wl_fixed_from_int((int)motionEvent.y());
           notify_motion_absolute(seat,
                         inputEvent.time(),
-                        motionEvent.x(),
-                        motionEvent.y());
+                        wl_x, wl_y);
           break;
         case MotionEvent::ACTION_BUTTON_PRESS:
           notify_button(seat,
@@ -79,6 +83,8 @@ void handle_event_proto(const socket_input *input, const char *buf, size_t data_
         weston_log("failed to parse proto, event ignored\n");
         return;
     }
+
+    weston_log("InputEvenProto %s\n", inputEvent.DebugString().c_str());
 
     if (inputEvent.type() == InputEventProto::KeyEventType) {
         handle_key_event(input, inputEvent);
