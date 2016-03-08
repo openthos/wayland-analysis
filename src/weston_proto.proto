@@ -1,0 +1,35 @@
+package com.dxmtb.westonapp;
+
+message KeyEvent {
+  required uint32 key = 1;
+//  optional int32 mMetaState = 2;
+//  optional int32 mAction = 3;
+//  optional int32 mKeyCode = 4;
+//  optional int32 mScancode = 5;
+//  optional int32 mRepeatCount = 6;
+//  optional int32 mDeviceId = 7;
+//  optional int32 mFlags = 8;
+//  optional string mCharacters = 9;
+}
+
+message MotionEvent {
+  enum ActionType {
+    ACTION_DOWN = 0;
+    ACTION_UP = 1;
+  }
+  required ActionType action_type = 1;
+  optional int32 x = 2;
+  optional int32 y = 3;
+};
+
+
+message InputEventProto {
+  enum EventType {
+    KeyEventType = 0;
+    MotionEventType = 1;
+  }
+  required EventType type = 1;
+  required uint64 time = 2;
+  optional KeyEvent key_event = 3;
+  optional MotionEvent motion_event = 4;
+}
