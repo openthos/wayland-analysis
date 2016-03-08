@@ -137,11 +137,11 @@ socket_input_notify_output_create(struct wl_listener *listener, void *data)
 static struct socket_input_seat*
 socket_input_seat_init(struct socket_input *input, const char *seat_id) {
 	struct weston_compositor *c = input->compositor;
-	struct socket_input_seat *seat = input->seat;
+	struct socket_input_seat *seat;
 	struct weston_seat *seat_base;
 	struct weston_pointer *pointer;
 
-	seat = zalloc(sizeof *seat);
+	seat = input->seat = zalloc(sizeof *seat);
 	if (!seat)
 		return NULL;
     seat_base = &(seat->base);
