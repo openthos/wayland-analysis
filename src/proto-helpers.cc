@@ -6,9 +6,35 @@
 using ::std::string;
 using ::com::dxmtb::westonapp::InputEventProto;
 using ::com::dxmtb::westonapp::MotionEvent;
+using ::com::dxmtb::westonapp::KeyEvent;
 
 void handle_key_event(const socket_input *input, const InputEventProto &inputEvent) {
-    weston_log("handle_key_event not implemented\n");
+    weston_log("handle_key_event enter\n");
+    if (!inputEvent.has_key_event()) {
+        weston_log("no KeyEvent in InputEventProto\n");
+        return;
+    }
+    const KeyEvent &keyEvent = inputEvent.keyEvent();
+    weston_seat *seat = &(input->seat->base);
+    switch (motionEvent.action_type()) {
+        case KeyEvent::ACTION_DOWN:
+          notify_key(seat,
+                     inputEvent.time(),
+                     keyEvent.key(),
+                     WL_KEYBOARD_KEY_STATE_PRESSED,
+                     STATE_UPDATE_AUTOMATIC);
+          break;
+        case KeyEvent::ACTION_UP:
+          notify_key(seat,
+                     inputEvent.time(),
+                     keyEvent.key(),
+                     WL_KEYBOARD_KEY_STATE_RELEASED,
+                     STATE_UPDATE_AUTOMATIC);
+          break;
+        default:
+          weston_log("Unknown action type\n");
+          break;
+    }
 }
 
 void handle_motion_event(const socket_input *input, const InputEventProto &inputEvent) {
@@ -20,13 +46,19 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
     const MotionEvent &motionEvent = inputEvent.motion_event();
     weston_seat *seat = &(input->seat->base);
     switch (motionEvent.action_type()) {
-        case MotionEvent::ACTION_DOWN:
+        case MotionEvent::ACTION_HOVER_MOVE:
+          notify_motion_absolute(seat,
+                        inputEvent.time(),
+                        motionEvent.x(),
+                        motionEvent.y());
+          break;
+        case MotionEvent::ACTION_BUTTON_PRESS:
           notify_button(seat,
                         inputEvent.time(),
                         0x110, //BTN_LEFT
                         WL_POINTER_BUTTON_STATE_PRESSED);
           break;
-        case MotionEvent::ACTION_UP:
+        case MotionEvent::ACTION_BUTTON_RELEASE:
           notify_button(seat,
                         inputEvent.time(),
                         0x110, //BTN_LEFT
