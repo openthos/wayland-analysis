@@ -29,6 +29,7 @@ AM_SILENT_RULES([yes])
 
 # Check for programs
 AC_PROG_CC
+AC_PROG_CXX
 AC_PROG_SED
 
 # Initialize libtool
@@ -237,6 +238,14 @@ AM_CONDITIONAL([ENABLE_IMAGE_COMPOSITOR],
                [test x$enable_image_compositor = xyes])
 AS_IF([test x$enable_image_compositor = xyes], [
   AC_DEFINE([BUILD_IMAGE_COMPOSITOR], [1], [Build the image compositor])
+  # Check protobuf
+  PKG_CHECK_MODULES(PROTOBUF, [protobuf >= 2.4.0])
+  AC_SUBST(PROTOBUF_LIBS)
+  AC_SUBST(PROTOBUF_CFLAGS)
+  AC_SUBST(PROTOBUF_VERSION)
+  AC_CHECK_PROG([PROTOC], [protoc], [protoc])
+  AS_IF([test "x${PROTOC}" == "x"],
+        [AC_MSG_ERROR([ProtoBuf compiler "protoc" not found.])])
 ])
 
 AC_ARG_ENABLE([rdp-compositor], [  --enable-rdp-compositor],,

@@ -14,7 +14,7 @@
 #define SERVER_HELLO "ServerHello"
 #define CLIENT_HELLO "ClientHello"
 
-// proto-helpers.c
+// proto-helpers.cc
 void handle_event_proto(const struct socket_input* input,
         const char *buf, size_t data_length);
 

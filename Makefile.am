@@ -380,12 +380,22 @@ if ENABLE_IMAGE_COMPOSITOR
 
 SOCKET_INPUT_SOURCES =				\
 	src/socket-input.c				\
-	src/socket-local-server.c
+	src/socket-local-server.c       \
+	src/proto-helpers.cc			\
+	src/weston_proto.pb.cc			\
+	src/weston_proto.pb.h
+
+dist_noinst_DATA = src/weston_proto.proto
+CLEANFILES += src/weston_proto.pb.cc src/weston_proto.pb.h
+BUILT_SOURCES += src/weston_proto.pb.h
 
 module_LTLIBRARIES += image-backend.la
 image_backend_la_LDFLAGS = -module -avoid-version
-image_backend_la_LIBADD = $(COMPOSITOR_LIBS) libsession-helper.la libshared.la
+image_backend_la_LIBADD = $(COMPOSITOR_LIBS) $(PROTOBUF_LIBS) \
+						  libsession-helper.la libshared.la
 image_backend_la_CFLAGS = $(COMPOSITOR_CFLAGS) $(PIXMAN_CFLAGS) $(AM_CFLAGS)
+image_backend_la_CPPFLAGS = $(COMPOSITOR_CFLAGS) $(PIXMAN_CFLAGS) $(PROTOBUF_CFLAGS) \
+							$(AM_CPPFLAGS)
 image_backend_la_SOURCES = src/compositor-image.c shared/helpers.h $(SOCKET_INPUT_SOURCES)
 endif
 
@@ -1460,3 +1470,6 @@ protocol/%-server-protocol.h : $(top_srcdir)/protocol/%.xml
 
 protocol/%-client-protocol.h : $(top_srcdir)/protocol/%.xml
 	$(AM_V_GEN)$(MKDIR_P) $(dir $@) && $(wayland_scanner) client-header < $< > $@
+
+%.pb.cc %.pb.h: %.proto
+	$(PROTOC) --proto_path=$(srcdir) --cpp_out=$(builddir) $^

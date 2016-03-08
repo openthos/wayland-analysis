@@ -1,11 +1,7 @@
 #include <string>
 
-#include "weston_proto.pb.h"
-
-extern "C" {
 #include "socket-input.h"
-//#include "compositor.h"
-};
+#include "weston_proto.pb.h"
 
 using ::std::string;
 using ::com::dxmtb::westonapp::InputEventProto;
@@ -22,15 +18,16 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
         return;
     }
     const MotionEvent &motionEvent = inputEvent.motion_event();
+    weston_seat *seat = &(input->seat->base);
     switch (motionEvent.action_type()) {
         case MotionEvent::ACTION_DOWN:
-          notify_button(input->seat,
+          notify_button(seat,
                         inputEvent.time(),
                         0x110, //BTN_LEFT
                         WL_POINTER_BUTTON_STATE_PRESSED);
           break;
         case MotionEvent::ACTION_UP:
-          notify_button(input->seat,
+          notify_button(seat,
                         inputEvent.time(),
                         0x110, //BTN_LEFT
                         WL_POINTER_BUTTON_STATE_RELEASED);
@@ -41,6 +38,7 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
     }
 }
 
+extern "C"
 void handle_event_proto(const socket_input *input, const char *buf, size_t data_length) {
     weston_log("handle_event_proto enter\n");
 

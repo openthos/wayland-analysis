@@ -16,6 +16,8 @@
 *.tar.xz
 *.trs
 *~
+*.pb.cc
+*.pb.h
 ctags
 cscope.out
 .libs
