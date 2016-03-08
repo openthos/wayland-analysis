@@ -33,7 +33,7 @@
 #define ANDROID_RESERVED_SOCKET_PREFIX "/dev/socket/"
 
 /* Documented in header file. */
-int socket_make_sockaddr_un(const char *name, int namespaceId, 
+static int socket_make_sockaddr_un(const char *name, int namespaceId, 
         struct sockaddr_un *p_addr, socklen_t *alen)
 {
     memset (p_addr, 0, sizeof (*p_addr));
@@ -97,7 +97,7 @@ error:
  *
  * Does not call listen()
  */
-int socket_local_server_bind(int s, const char *name, int namespaceId)
+static int socket_local_server_bind(int s, const char *name, int namespaceId)
 {
     struct sockaddr_un addr;
     socklen_t alen;
