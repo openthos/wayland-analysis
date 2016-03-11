@@ -12,12 +12,14 @@ message KeyEvent {
 message MotionEvent {
   enum ActionType {
       ACTION_HOVER_MOVE = 7;
+      ACTION_SCROLL = 8;
       ACTION_BUTTON_PRESS = 11;
       ACTION_BUTTON_RELEASE = 12;
   }
   required ActionType action_type = 1;
   optional int32 x = 2;
   optional int32 y = 3;
+  optional float axis = 4;
 };
 
 
