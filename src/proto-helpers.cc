@@ -46,15 +46,15 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
     const MotionEvent &motionEvent = inputEvent.motion_event();
 
     weston_seat *seat = &(input->seat->base);
+    wl_fixed_t wl_x, wl_y;
+    wl_x = wl_fixed_from_int((int)motionEvent.x());
+    wl_y = wl_fixed_from_int((int)motionEvent.y());
+    notify_motion_absolute(seat,
+            inputEvent.time(),
+            wl_x, wl_y);
 
     switch (motionEvent.action_type()) {
         case MotionEvent::ACTION_HOVER_MOVE:
-          wl_fixed_t wl_x, wl_y;
-          wl_x = wl_fixed_from_int((int)motionEvent.x());
-          wl_y = wl_fixed_from_int((int)motionEvent.y());
-          notify_motion_absolute(seat,
-                        inputEvent.time(),
-                        wl_x, wl_y);
           break;
         case MotionEvent::ACTION_BUTTON_PRESS:
           notify_button(seat,
