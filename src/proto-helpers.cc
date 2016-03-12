@@ -59,13 +59,13 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
         case MotionEvent::ACTION_BUTTON_PRESS:
           notify_button(seat,
                         inputEvent.time(),
-                        0x110, //BTN_LEFT
+                        motionEvent.button(),
                         WL_POINTER_BUTTON_STATE_PRESSED);
           break;
         case MotionEvent::ACTION_BUTTON_RELEASE:
           notify_button(seat,
                         inputEvent.time(),
-                        0x110, //BTN_LEFT
+                        motionEvent.button(),
                         WL_POINTER_BUTTON_STATE_RELEASED);
           break;
         default:
