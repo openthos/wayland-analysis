@@ -34,6 +34,7 @@
 #include <string.h>
 #include <math.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -266,6 +267,10 @@ static void create_file(const char *path, size_t length) {
         return;
     }
     free(buf);
+    if (chmod(path, 0777) < 0) {
+        weston_log("Failed to chmod file %s\n", path);
+        return;
+    }
 }
 
 /* Returns an FD for the frame buffer device. */
