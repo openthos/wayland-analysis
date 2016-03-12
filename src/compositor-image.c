@@ -183,23 +183,22 @@ finish_frame_handler(void *data)
 	return 1;
 }
 
+static struct image_screeninfo global_screeninfo = {
+       .bits_per_pixel = 32,
+       .id = "imagescreen",
+       .pixel_format = PIXMAN_a8b8g8r8,
+       .refresh_rate = 60000,
+};
+
 static int
-image_query_screen_info(struct image_output *output, int fd,
-                        struct image_screeninfo *info)
+image_query_screen_info(struct image_screeninfo *info)
 {
-	/* Store the pertinent data. */
-	info->x_resolution = 800;
-	info->y_resolution = 600;
-	info->width_mm = 800;
-	info->height_mm = 600;
-	info->bits_per_pixel = 32;
+    memcpy(info, &global_screeninfo, sizeof(struct image_screeninfo));
 
-	info->buffer_length = 5763072;
-	info->line_length = info->width_mm * (info->bits_per_pixel / 8);
-        strcpy(info->id, "imagescreen");
-
-	info->pixel_format = PIXMAN_a8r8g8b8;
-	info->refresh_rate = 60000;
+    info->width_mm = info->x_resolution;
+    info->height_mm = info->y_resolution;
+    info->line_length = info->width_mm * (info->bits_per_pixel / 8);
+    info->buffer_length = info->line_length * info->height_mm;
 
 	return 1;
 }
@@ -247,6 +246,28 @@ image_query_screen_info(struct image_output *output, int fd,
 
 static void image_frame_buffer_destroy(struct image_output *output);
 
+static void create_file(const char *path, size_t length) {
+    char *buf = zalloc(length);
+    if (!buf) {
+        weston_log("Failed to create file %s when zalloc %zu\n", path, length);
+        return;
+    }
+    int fd = open(path, O_RDWR | O_CLOEXEC | O_CREAT);
+    if (fd < 0) {
+        weston_log("Failed to create file %s when open\n", path);
+        return;
+    }
+    if (write(fd, buf, length) < 0) {
+        weston_log("Failed to create file %s when write\n", path);
+        return;
+    }
+    if (close(fd) < 0) {
+        weston_log("Failed to create file %s when close\n", path);
+        return;
+    }
+    free(buf);
+}
+
 /* Returns an FD for the frame buffer device. */
 static int
 image_frame_buffer_open(struct image_output *output, const char *fb_dev,
@@ -254,22 +275,24 @@ image_frame_buffer_open(struct image_output *output, const char *fb_dev,
 {
 	int fd = -1;
 
+	/* Grab the screen info. */
+	if (image_query_screen_info(screen_info) < 0) {
+		weston_log("Failed to get frame buffer info: %s\n",
+		           strerror(errno));
+
+		close(fd);
+		return -1;
+	}
+
 	weston_log("Opening image frame buffer.\n");
+
+    create_file(fb_dev, screen_info->buffer_length);
 
 	/* Open the frame buffer device. */
 	fd = open(fb_dev, O_RDWR | O_CLOEXEC | O_CREAT);
 	if (fd < 0) {
 		weston_log("Failed to open frame buffer device ‘%s’: %s\n",
 		           fb_dev, strerror(errno));
-		return -1;
-	}
-
-	/* Grab the screen info. */
-	if (image_query_screen_info(output, fd, screen_info) < 0) {
-		weston_log("Failed to get frame buffer info: %s\n",
-		           strerror(errno));
-
-		close(fd);
 		return -1;
 	}
 
@@ -722,12 +745,19 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 		.use_gl = 0,
 	};
 
+    int width, height;
+
 	const struct weston_option image_options[] = {
 		{ WESTON_OPTION_STRING, "device", 0, &param.device },
 		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &param.use_gl },
+		{ WESTON_OPTION_INTEGER, "width", 800, &width },
+		{ WESTON_OPTION_INTEGER, "height", 600, &height },
 	};
 
 	parse_options(image_options, ARRAY_LENGTH(image_options), argc, argv);
+
+    global_screeninfo.x_resolution = width;
+    global_screeninfo.y_resolution = height;
 
 	b = image_backend_create(compositor, argc, argv, config, &param);
 	if (b == NULL)
