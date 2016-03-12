@@ -20,6 +20,7 @@ message MotionEvent {
   optional int32 x = 2;
   optional int32 y = 3;
   optional float axis = 4;
+  optional int32 button = 5;
 };
 
 
