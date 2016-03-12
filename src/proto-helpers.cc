@@ -53,6 +53,8 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
             inputEvent.time(),
             wl_x, wl_y);
 
+    struct weston_pointer_axis_event weston_event;
+    double value;
     switch (motionEvent.action_type()) {
         case MotionEvent::ACTION_HOVER_MOVE:
           break;
@@ -67,6 +69,15 @@ void handle_motion_event(const socket_input *input, const InputEventProto &input
                         inputEvent.time(),
                         motionEvent.button(),
                         WL_POINTER_BUTTON_STATE_RELEASED);
+          break;
+        case MotionEvent::ACTION_SCROLL:
+          value = motionEvent.axis();
+          weston_event.axis = WL_POINTER_AXIS_VERTICAL_SCROLL;
+          weston_event.value = wl_fixed_from_double(10 * value);
+          weston_event.discrete = (int)value;
+          weston_event.has_discrete = true;
+          notify_axis(seat, inputEvent.time(),
+                  &weston_event);
           break;
         default:
           weston_log("Unknown action type\n");
