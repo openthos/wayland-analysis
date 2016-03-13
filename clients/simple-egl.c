@@ -823,6 +823,40 @@ usage(int error_code)
 	exit(error_code);
 }
 
+
+static void
+log_egl_gl_info(EGLDisplay egldpy)
+{
+	const char *str;
+
+	str = eglQueryString(egldpy, EGL_VERSION);
+	printf("EGL version: %s\n", str ? str : "(null)");
+
+	str = eglQueryString(egldpy, EGL_VENDOR);
+	printf("EGL vendor: %s\n", str ? str : "(null)");
+
+	str = eglQueryString(egldpy, EGL_CLIENT_APIS);
+	printf("EGL client APIs: %s\n", str ? str : "(null)");
+
+	str = eglQueryString(egldpy, EGL_EXTENSIONS);
+	printf("EGL extensions: %s\n", str ? str : "(null)");
+
+	str = (char *)glGetString(GL_VERSION);
+	printf("GL version: %s\n", str ? str : "(null)");
+
+	str = (char *)glGetString(GL_SHADING_LANGUAGE_VERSION);
+	printf("GLSL version: %s\n", str ? str : "(null)");
+
+	str = (char *)glGetString(GL_VENDOR);
+	printf("GL vendor: %s\n", str ? str : "(null)");
+
+	str = (char *)glGetString(GL_RENDERER);
+	printf("GL renderer: %s\n", str ? str : "(null)");
+
+	str = (char *)glGetString(GL_EXTENSIONS);
+	printf("GL extensions: %s\n", str ? str : "(null)");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -866,6 +900,8 @@ main(int argc, char **argv)
 	init_egl(&display, &window);
 	create_surface(&window);
 	init_gl(&window);
+
+	log_egl_gl_info(display.egl.dpy);
 
 	display.cursor_surface =
 		wl_compositor_create_surface(display.compositor);
