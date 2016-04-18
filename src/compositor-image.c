@@ -60,6 +60,8 @@ struct image_backend {
 	struct socket_input input;
 	int use_pixman;
 	struct wl_listener session_listener;
+
+	int drm_fd; // For GBM
 };
 
 struct image_screeninfo {
@@ -128,15 +130,25 @@ static void
 image_output_repaint_pixman(struct weston_output *base, pixman_region32_t *damage)
 {
 	struct image_output *output = to_image_output(base);
-	struct weston_compositor *ec = output->base.compositor;
+	struct image_backend *b = output->backend;
+	struct weston_compositor *ec = b->compositor;
 
-	/* Repaint the damaged region onto the back buffer. */
-	pixman_renderer_output_set_buffer(base, output->hw_surface);
-	ec->renderer->repaint_output(base, damage);
+	if (b->use_pixman) {
+		/* Repaint the damaged region onto the back buffer. */
+		pixman_renderer_output_set_buffer(base, output->hw_surface);
+		ec->renderer->repaint_output(base, damage);
+	} else {
+		ec->renderer->repaint_output(base, damage);
+
+		ec->renderer->read_pixels(output,
+				global_screeninfo.read_format, output->fb,
+				0, 0, global_screeninfo.width,
+				global_screeninfo.height);
+	}
 
 	/* Update the damage region. */
 	pixman_region32_subtract(&ec->primary_plane.damage,
-	                         &ec->primary_plane.damage, damage);
+			&ec->primary_plane.damage, damage);
 
 	/* Schedule the end of the frame. We do not sync this to the frame
 	 * buffer clock because users who want that should be using the DRM
@@ -146,27 +158,7 @@ image_output_repaint_pixman(struct weston_output *base, pixman_region32_t *damag
 	 * Finish the frame synchronised to the specified refresh rate. The
 	 * refresh rate is given in mHz and the interval in ms. */
 	wl_event_source_timer_update(output->finish_frame_timer,
-	                             1000000 / output->mode.refresh);
-}
-
-static int
-image_output_repaint(struct weston_output *base, pixman_region32_t *damage)
-{
-	struct image_output *output = to_image_output(base);
-	struct image_backend *fbb = output->backend;
-	struct weston_compositor *ec = fbb->compositor;
-
-	if (fbb->use_pixman) {
-		image_output_repaint_pixman(base,damage);
-	} else {
-		ec->renderer->repaint_output(base, damage);
-		/* Update the damage region. */
-		pixman_region32_subtract(&ec->primary_plane.damage,
-	                         &ec->primary_plane.damage, damage);
-
-		wl_event_source_timer_update(output->finish_frame_timer,
-	                             1000000 / output->mode.refresh);
-	}
+			1000000 / output->mode.refresh);
 
 	return 0;
 }
@@ -184,92 +176,51 @@ finish_frame_handler(void *data)
 }
 
 static struct image_screeninfo global_screeninfo = {
-       .bits_per_pixel = 32,
-       .id = "imagescreen",
-       .pixel_format = PIXMAN_a8b8g8r8,
-       .refresh_rate = 60000,
+	.bits_per_pixel = 32,
+	.id = "imagescreen",
+	.pixel_format = PIXMAN_a8b8g8r8,
+	.refresh_rate = 60000,
 };
 
 static int
 image_query_screen_info(struct image_screeninfo *info)
 {
-    memcpy(info, &global_screeninfo, sizeof(struct image_screeninfo));
+	memcpy(info, &global_screeninfo, sizeof(struct image_screeninfo));
 
-    info->width_mm = info->x_resolution;
-    info->height_mm = info->y_resolution;
-    info->line_length = info->width_mm * (info->bits_per_pixel / 8);
-    info->buffer_length = info->line_length * info->height_mm;
+	info->width_mm = info->x_resolution;
+	info->height_mm = info->y_resolution;
+	info->line_length = info->width_mm * (info->bits_per_pixel / 8);
+	info->buffer_length = info->line_length * info->height_mm;
 
 	return 1;
 }
 
-//static int
-//image_set_screen_info(struct image_output *output, int fd,
-//                      struct image_screeninfo *info)
-//{
-//	struct fb_var_screeninfo varinfo;
-//
-//	/* Grab the current screen information. */
-//	if (ioctl(fd, FBIOGET_VSCREENINFO, &varinfo) < 0) {
-//		return -1;
-//	}
-//
-//	/* Update the information. */
-//	varinfo.xres = info->x_resolution;
-//	varinfo.yres = info->y_resolution;
-//	varinfo.width = info->width_mm;
-//	varinfo.height = info->height_mm;
-//	varinfo.bits_per_pixel = info->bits_per_pixel;
-//
-//	/* Try to set up an ARGB (x8r8g8b8) pixel format. */
-//	varinfo.grayscale = 0;
-//	varinfo.transp.offset = 24;
-//	varinfo.transp.length = 0;
-//	varinfo.transp.msb_right = 0;
-//	varinfo.red.offset = 16;
-//	varinfo.red.length = 8;
-//	varinfo.red.msb_right = 0;
-//	varinfo.green.offset = 8;
-//	varinfo.green.length = 8;
-//	varinfo.green.msb_right = 0;
-//	varinfo.blue.offset = 0;
-//	varinfo.blue.length = 8;
-//	varinfo.blue.msb_right = 0;
-//
-//	/* Set the device's screen information. */
-//	if (ioctl(fd, FBIOPUT_VSCREENINFO, &varinfo) < 0) {
-//		return -1;
-//	}
-//
-//	return 1;
-//}
-
 static void image_frame_buffer_destroy(struct image_output *output);
 
 static void create_file(const char *path, size_t length) {
-    char *buf = zalloc(length);
-    if (!buf) {
-        weston_log("Failed to create file %s when zalloc %zu\n", path, length);
-        return;
-    }
-    int fd = open(path, O_RDWR | O_CLOEXEC | O_CREAT);
-    if (fd < 0) {
-        weston_log("Failed to create file %s when open\n", path);
-        return;
-    }
-    if (write(fd, buf, length) < 0) {
-        weston_log("Failed to create file %s when write\n", path);
-        return;
-    }
-    if (close(fd) < 0) {
-        weston_log("Failed to create file %s when close\n", path);
-        return;
-    }
-    free(buf);
-    if (chmod(path, 0777) < 0) {
-        weston_log("Failed to chmod file %s\n", path);
-        return;
-    }
+	char *buf = zalloc(length);
+	if (!buf) {
+		weston_log("Failed to create file %s when zalloc %zu\n", path, length);
+		return;
+	}
+	int fd = open(path, O_RDWR | O_CLOEXEC | O_CREAT);
+	if (fd < 0) {
+		weston_log("Failed to create file %s when open\n", path);
+		return;
+	}
+	if (write(fd, buf, length) < 0) {
+		weston_log("Failed to create file %s when write\n", path);
+		return;
+	}
+	if (close(fd) < 0) {
+		weston_log("Failed to create file %s when close\n", path);
+		return;
+	}
+	free(buf);
+	if (chmod(path, 0777) < 0) {
+		weston_log("Failed to chmod file %s\n", path);
+		return;
+	}
 }
 
 /* Returns an FD for the frame buffer device. */
@@ -290,7 +241,7 @@ image_frame_buffer_open(struct image_output *output, const char *fb_dev,
 
 	weston_log("Opening image frame buffer.\n");
 
-    create_file(fb_dev, screen_info->buffer_length);
+	create_file(fb_dev, screen_info->buffer_length);
 
 	/* Open the frame buffer device. */
 	fd = open(fb_dev, O_RDWR | O_CLOEXEC | O_CREAT);
@@ -388,13 +339,10 @@ image_output_create(struct image_backend *backend,
 		weston_log("Creating frame buffer failed.\n");
 		goto out_free;
 	}
-	if (backend->use_pixman) {
-		if (image_frame_buffer_map(output, fb_fd) < 0) {
-			weston_log("Mapping frame buffer failed.\n");
-			goto out_free;
-		}
-	} else {
-		close(fb_fd);
+
+	if (image_frame_buffer_map(output, fb_fd) < 0) {
+		weston_log("Mapping frame buffer failed.\n");
+		goto out_free;
 	}
 
 	output->base.start_repaint_loop = image_output_start_repaint_loop;
@@ -435,12 +383,7 @@ image_output_create(struct image_backend *backend,
 		if (pixman_renderer_output_create(&output->base) < 0)
 			goto out_hw_surface;
 	} else {
-		setenv("HYBRIS_EGLPLATFORM", "wayland", 1);
-		if (gl_renderer->output_create(&output->base,
-					       (EGLNativeWindowType)NULL, NULL,
-					       gl_renderer->opaque_attribs,
-					       NULL, 0) < 0) {
-			weston_log("gl_renderer_output_create failed.\n");
+		if (image_output_init_egl(output, b) < 0) {
 			goto out_hw_surface;
 		}
 	}
@@ -492,6 +435,43 @@ image_output_destroy(struct weston_output *base)
 
 	free(output);
 }
+
+/* Init output state that depends on gl or gbm */
+static int
+image_output_init_egl(struct image_output *output, struct image_backend *b)
+{
+	EGLint format[2] = {
+		GBM_FORMAT_XRGB8888,
+		GBM_FORMAT_ARGB8888;
+	};
+	int i, flags, n_formats = 1;
+
+	output->surface = gbm_surface_create(b->gbm,
+			output->base.current_mode->width,
+			output->base.current_mode->height,
+			format[0],
+			GBM_BO_USE_RENDERING);
+	if (!output->surface) {
+		weston_log("failed to create gbm surface\n");
+		return -1;
+	}
+
+	if (format[1])
+		n_formats = 2;
+	if (gl_renderer->output_create(&output->base,
+				(EGLNativeWindowType)output->surface,
+				output->surface,
+				gl_renderer->opaque_attribs,
+				format,
+				n_formats) < 0) {
+		weston_log("failed to create gl renderer output state\n");
+		gbm_surface_destroy(output->surface);
+		return -1;
+	}
+
+	return 0;
+}
+
 
 /* strcmp()-style return values. */
 static int
@@ -651,6 +631,67 @@ image_restore(struct weston_compositor *compositor)
 	weston_launcher_restore(compositor->launcher);
 }
 
+static int
+image_backend_create_gl_renderer(struct image_backend *b)
+{
+	EGLint format[3] = {
+		GBM_FORMAT_XRGB8888,
+		GBM_FORMAT_ARGB8888
+		0,
+	};
+	int n_formats = 2;
+
+	if (format[1])
+		n_formats = 3;
+	if (gl_renderer->create(b->compositor,
+				EGL_PLATFORM_GBM_KHR,
+				(void *)b->gbm,
+				gl_renderer->opaque_attribs,
+				format,
+				n_formats) < 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+init_egl(struct image_backend *b)
+{
+	b->gbm = create_gbm_device(b->drm_fd);
+
+	if (!b->gbm)
+		return -1;
+
+	if (image_backend_create_gl_renderer(b) < 0) {
+		gbm_device_destroy(b->gbm);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+init_drm(struct image_backend *b, struct char* filename)
+{
+	int fd;
+
+	fd = weston_launcher_open(b->compositor->launcher, filename, O_RDWR);
+	if (fd < 0) {
+		/* Probably permissions error */
+		weston_log("couldn't open %s, skipping\n",
+				filename);
+		return -1;
+	}
+
+	weston_log("using %s\n", filename);
+
+	b->drm_fd = fd;
+
+	return 0;
+}
+
+
 static struct image_backend *
 image_backend_create(struct weston_compositor *compositor, int *argc, char *argv[],
                      struct weston_config *config,
@@ -694,18 +735,12 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 		if (pixman_renderer_init(compositor) < 0)
 			goto out_launcher;
 	} else {
-		gl_renderer = weston_load_module("gl-renderer.so",
-						 "gl_renderer_interface");
-		if (!gl_renderer) {
-			weston_log("could not load gl renderer\n");
+		if (init_drm(b, "/dev/dri/card0") < 0) {
+			weston_log("failed to initialize kms\n");
 			goto out_launcher;
 		}
-
-		if (gl_renderer->create(compositor, NO_EGL_PLATFORM,
-					EGL_DEFAULT_DISPLAY,
-					gl_renderer->opaque_attribs,
-					NULL, 0) < 0) {
-			weston_log("gl_renderer_create failed.\n");
+		if (init_egl(backend) < 0) {
+			weston_log("failed to initialize egl\n");
 			goto out_launcher;
 		}
 	}
@@ -713,7 +748,7 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 	if (image_output_create(backend, param->device) < 0)
 		goto out_launcher;
 
-    socket_input_init(&backend->input, compositor, seat_id);
+	socket_input_init(&backend->input, compositor, seat_id);
 
 	compositor->backend = &backend->base;
 	return backend;
@@ -741,19 +776,14 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 		.use_gl = 0,
 	};
 
-    int width, height;
-
 	const struct weston_option image_options[] = {
 		{ WESTON_OPTION_STRING, "device", 0, &param.device },
 		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &param.use_gl },
-		{ WESTON_OPTION_INTEGER, "width", 800, &width },
-		{ WESTON_OPTION_INTEGER, "height", 600, &height },
+		{ WESTON_OPTION_INTEGER, "width", 800, &global_screeninfo.x_resolution },
+		{ WESTON_OPTION_INTEGER, "height", 600, &global_screeninfo.y_resolution },
 	};
 
 	parse_options(image_options, ARRAY_LENGTH(image_options), argc, argv);
-
-    global_screeninfo.x_resolution = width;
-    global_screeninfo.y_resolution = height;
 
 	b = image_backend_create(compositor, argc, argv, config, &param);
 	if (b == NULL)
