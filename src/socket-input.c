@@ -198,3 +198,9 @@ int socket_input_init(struct socket_input *input, struct weston_compositor *c,
 
     return 0;
 }
+
+void
+socket_input_destroy(struct socket_input *input)
+{
+    weston_seat_release(&input->seat->base);
+}

@@ -19,4 +19,6 @@ struct socket_input_seat {
 int socket_input_init(struct socket_input *input, struct weston_compositor *c,
         const char *seat_id);
 
+void socket_input_destroy(struct socket_input *input);
+
 #endif /* SOCKET-INPUT_H */

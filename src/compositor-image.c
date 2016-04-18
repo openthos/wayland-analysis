@@ -57,7 +57,6 @@ struct image_backend {
 	struct weston_compositor *compositor;
 	uint32_t prev_state;
 
-    struct weston_seat fake_seat;
 	struct socket_input input;
 	int use_pixman;
 	struct wl_listener session_listener;
@@ -587,14 +586,12 @@ image_output_disable(struct weston_output *base)
 	image_frame_buffer_destroy(output);
 }
 
-static void socket_input_destroy(struct image_backend *b);
-
 static void
 image_backend_destroy(struct weston_compositor *base)
 {
 	struct image_backend *backend = to_image_backend(base);
 
-	socket_input_destroy(backend);
+	socket_input_destroy(&backend->input);
 
 	/* Destroy the output. */
 	weston_compositor_shutdown(base);
@@ -646,12 +643,6 @@ session_notify(struct wl_listener *listener, void *data)
 			output->repaint_needed = 0;
 		}
 	}
-}
-
-static void
-socket_input_destroy(struct image_backend *b)
-{
-	weston_seat_release(&b->fake_seat);
 }
 
 static void
