@@ -110,7 +110,7 @@ AM_CONDITIONAL(ENABLE_SETUID_INSTALL, test x$enable_setuid_install = xyes)
 
 
 AC_ARG_ENABLE(xwayland, [  --enable-xwayland],,
-	      enable_xwayland=no)
+	      enable_xwayland=yes)
 AC_ARG_ENABLE(xwayland-test, [  --enable-xwayland-test],,
               enable_xwayland_test=yes)
 AM_CONDITIONAL(ENABLE_XWAYLAND, test x$enable_xwayland = xyes)
