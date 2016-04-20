@@ -392,8 +392,9 @@ BUILT_SOURCES += src/weston_proto.pb.h
 module_LTLIBRARIES += image-backend.la
 image_backend_la_LDFLAGS = -module -avoid-version
 image_backend_la_LIBADD = $(COMPOSITOR_LIBS) $(PROTOBUF_LIBS) \
-						  libsession-helper.la libshared.la
-image_backend_la_CFLAGS = $(COMPOSITOR_CFLAGS) $(PIXMAN_CFLAGS) $(AM_CFLAGS)
+			  $(IMAGE_COMPOSITOR_LIBS)	\
+			  libsession-helper.la libshared.la
+image_backend_la_CFLAGS = $(COMPOSITOR_CFLAGS) $(PIXMAN_CFLAGS) $(AM_CFLAGS) $(IMAGE_COMPOSITOR_CFLAGS)
 image_backend_la_CPPFLAGS = $(COMPOSITOR_CFLAGS) $(PIXMAN_CFLAGS) $(PROTOBUF_CFLAGS) \
 							$(AM_CPPFLAGS)
 image_backend_la_SOURCES = src/compositor-image.c shared/helpers.h $(SOCKET_INPUT_SOURCES)

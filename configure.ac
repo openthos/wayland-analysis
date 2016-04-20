@@ -236,6 +236,9 @@ AC_ARG_ENABLE([image-compositor], [  --enable-image-compositor],,
               enable_image_compositor=yes)
 AM_CONDITIONAL([ENABLE_IMAGE_COMPOSITOR],
                [test x$enable_image_compositor = xyes])
+if test x$enable_image_compositor = xyes; then
+  PKG_CHECK_MODULES(IMAGE_COMPOSITOR, [gbm])
+fi
 AS_IF([test x$enable_image_compositor = xyes], [
   AC_DEFINE([BUILD_IMAGE_COMPOSITOR], [1], [Build the image compositor])
   # Check protobuf
