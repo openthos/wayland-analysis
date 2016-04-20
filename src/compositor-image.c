@@ -40,8 +40,9 @@
 #include <unistd.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <dlfcn.h>
 
-#include <libudev.h>
+#include <gbm.h>
 
 #include "shared/helpers.h"
 #include "compositor.h"
@@ -62,6 +63,7 @@ struct image_backend {
 	struct wl_listener session_listener;
 
 	int drm_fd; // For GBM
+    struct gbm_device *gbm;
 };
 
 struct image_screeninfo {
@@ -94,6 +96,8 @@ struct image_output {
 	/* pixman details. */
 	pixman_image_t *hw_surface;
 	uint8_t depth;
+
+	struct gbm_surface *surface;
 };
 
 struct image_parameters {
@@ -104,6 +108,13 @@ struct image_parameters {
 struct gl_renderer_interface *gl_renderer;
 
 static const char default_seat[] = "seat0";
+
+static struct image_screeninfo global_screeninfo = {
+	.bits_per_pixel = 32,
+	.id = "imagescreen",
+	.pixel_format = PIXMAN_a8b8g8r8,
+	.refresh_rate = 60000,
+};
 
 static inline struct image_output *
 to_image_output(struct weston_output *base)
@@ -126,8 +137,8 @@ image_output_start_repaint_loop(struct weston_output *output)
 	weston_output_finish_frame(output, &ts, PRESENTATION_FEEDBACK_INVALID);
 }
 
-static void
-image_output_repaint_pixman(struct weston_output *base, pixman_region32_t *damage)
+static int
+image_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 {
 	struct image_output *output = to_image_output(base);
 	struct image_backend *b = output->backend;
@@ -140,10 +151,10 @@ image_output_repaint_pixman(struct weston_output *base, pixman_region32_t *damag
 	} else {
 		ec->renderer->repaint_output(base, damage);
 
-		ec->renderer->read_pixels(output,
-				global_screeninfo.read_format, output->fb,
-				0, 0, global_screeninfo.width,
-				global_screeninfo.height);
+		ec->renderer->read_pixels(base,
+				global_screeninfo.pixel_format, output->fb,
+				0, 0, global_screeninfo.x_resolution,
+				global_screeninfo.y_resolution);
 	}
 
 	/* Update the damage region. */
@@ -174,13 +185,6 @@ finish_frame_handler(void *data)
 
 	return 1;
 }
-
-static struct image_screeninfo global_screeninfo = {
-	.bits_per_pixel = 32,
-	.id = "imagescreen",
-	.pixel_format = PIXMAN_a8b8g8r8,
-	.refresh_rate = 60000,
-};
 
 static int
 image_query_screen_info(struct image_screeninfo *info)
@@ -313,6 +317,43 @@ image_frame_buffer_destroy(struct image_output *output)
 static void image_output_destroy(struct weston_output *base);
 static void image_output_disable(struct weston_output *base);
 
+/* Init output state that depends on gl or gbm */
+static int
+image_output_init_egl(struct image_output *output, struct image_backend *b)
+{
+	EGLint format[2] = {
+		GBM_FORMAT_XRGB8888,
+		GBM_FORMAT_ARGB8888
+	};
+	int n_formats = 1;
+
+	output->surface = gbm_surface_create(b->gbm,
+			output->base.current_mode->width,
+			output->base.current_mode->height,
+			format[0],
+			GBM_BO_USE_RENDERING);
+	if (!output->surface) {
+		weston_log("failed to create gbm surface\n");
+		return -1;
+	}
+
+	if (format[1])
+		n_formats = 2;
+	if (gl_renderer->output_create(&output->base,
+				(EGLNativeWindowType)output->surface,
+				output->surface,
+				gl_renderer->opaque_attribs,
+				format,
+				n_formats) < 0) {
+		weston_log("failed to create gl renderer output state\n");
+		gbm_surface_destroy(output->surface);
+		return -1;
+	}
+
+	return 0;
+}
+
+
 static int
 image_output_create(struct image_backend *backend,
                     const char *device)
@@ -383,7 +424,7 @@ image_output_create(struct image_backend *backend,
 		if (pixman_renderer_output_create(&output->base) < 0)
 			goto out_hw_surface;
 	} else {
-		if (image_output_init_egl(output, b) < 0) {
+		if (image_output_init_egl(output, backend) < 0) {
 			goto out_hw_surface;
 		}
 	}
@@ -435,43 +476,6 @@ image_output_destroy(struct weston_output *base)
 
 	free(output);
 }
-
-/* Init output state that depends on gl or gbm */
-static int
-image_output_init_egl(struct image_output *output, struct image_backend *b)
-{
-	EGLint format[2] = {
-		GBM_FORMAT_XRGB8888,
-		GBM_FORMAT_ARGB8888;
-	};
-	int i, flags, n_formats = 1;
-
-	output->surface = gbm_surface_create(b->gbm,
-			output->base.current_mode->width,
-			output->base.current_mode->height,
-			format[0],
-			GBM_BO_USE_RENDERING);
-	if (!output->surface) {
-		weston_log("failed to create gbm surface\n");
-		return -1;
-	}
-
-	if (format[1])
-		n_formats = 2;
-	if (gl_renderer->output_create(&output->base,
-				(EGLNativeWindowType)output->surface,
-				output->surface,
-				gl_renderer->opaque_attribs,
-				format,
-				n_formats) < 0) {
-		weston_log("failed to create gl renderer output state\n");
-		gbm_surface_destroy(output->surface);
-		return -1;
-	}
-
-	return 0;
-}
-
 
 /* strcmp()-style return values. */
 static int
@@ -636,7 +640,7 @@ image_backend_create_gl_renderer(struct image_backend *b)
 {
 	EGLint format[3] = {
 		GBM_FORMAT_XRGB8888,
-		GBM_FORMAT_ARGB8888
+		GBM_FORMAT_ARGB8888,
 		0,
 	};
 	int n_formats = 2;
@@ -653,6 +657,28 @@ image_backend_create_gl_renderer(struct image_backend *b)
 	}
 
 	return 0;
+}
+
+static struct gbm_device *
+create_gbm_device(int fd)
+{
+	struct gbm_device *gbm;
+
+	gl_renderer = weston_load_module("gl-renderer.so",
+					 "gl_renderer_interface");
+	if (!gl_renderer)
+		return NULL;
+
+	/* GBM will load a dri driver, but even though they need symbols from
+	 * libglapi, in some version of Mesa they are not linked to it. Since
+	 * only the gl-renderer module links to it, the call above won't make
+	 * these symbols globally available, and loading the DRI driver fails.
+	 * Workaround this by dlopen()'ing libglapi with RTLD_GLOBAL. */
+	dlopen("libglapi.so.0", RTLD_LAZY | RTLD_GLOBAL);
+
+	gbm = gbm_create_device(fd);
+
+	return gbm;
 }
 
 static int
@@ -672,7 +698,7 @@ init_egl(struct image_backend *b)
 }
 
 static int
-init_drm(struct image_backend *b, struct char* filename)
+init_drm(struct image_backend *b, const char* filename)
 {
 	int fd;
 
@@ -735,7 +761,7 @@ image_backend_create(struct weston_compositor *compositor, int *argc, char *argv
 		if (pixman_renderer_init(compositor) < 0)
 			goto out_launcher;
 	} else {
-		if (init_drm(b, "/dev/dri/card0") < 0) {
+		if (init_drm(backend, "/dev/dri/card0") < 0) {
 			weston_log("failed to initialize kms\n");
 			goto out_launcher;
 		}
