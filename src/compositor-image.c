@@ -91,7 +91,7 @@ struct image_output {
 	/* Frame buffer details. */
 	const char *device; /* ownership shared with image_parameters */
 	struct image_screeninfo fb_info;
-	void *fb; /* length is fb_info.buffer_length */
+	void *fb, *fb_tmp; /* length is fb_info.buffer_length */
 
 	/* pixman details. */
 	pixman_image_t *hw_surface;
@@ -154,9 +154,15 @@ image_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 		ec->renderer->repaint_output(base, damage);
 
 		ec->renderer->read_pixels(base,
-				global_screeninfo.pixel_format, output->fb,
+				global_screeninfo.pixel_format, output->fb_tmp,
 				0, 0, global_screeninfo.x_resolution,
 				global_screeninfo.y_resolution);
+
+		for (int i = 0, j = global_screeninfo.y_resolution - 1; j >= 0; i++, j--) {
+		    memcpy(output->fb + i * global_screeninfo.line_length,
+			   output->fb_tmp + j * global_screeninfo.line_length,
+			   global_screeninfo.line_length);
+		}
 	}
 
 	/* Update the damage region. */
@@ -275,7 +281,8 @@ image_frame_buffer_map(struct image_output *output, int fd)
 	 * anything back (because it's slow). */
 	output->fb = mmap(NULL, output->fb_info.buffer_length,
 	                  PROT_WRITE, MAP_SHARED, fd, 0);
-	if (output->fb == MAP_FAILED) {
+	output->fb_tmp = malloc(output->fb_info.buffer_length);
+	if (output->fb == MAP_FAILED || !output->fb_tmp) {
 		weston_log("Failed to mmap frame buffer: %s\n",
 		           strerror(errno));
 		goto out_close;
