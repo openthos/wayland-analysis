@@ -110,6 +110,8 @@ struct gl_renderer_interface *gl_renderer;
 static const char default_seat[] = "seat0";
 
 static struct image_screeninfo global_screeninfo = {
+	.x_resolution = 800,
+	.y_resolution = 600,
 	.bits_per_pixel = 32,
 	.id = "imagescreen",
 	.pixel_format = PIXMAN_a8b8g8r8,
@@ -196,6 +198,8 @@ image_query_screen_info(struct image_screeninfo *info)
 	info->line_length = info->width_mm * (info->bits_per_pixel / 8);
 	info->buffer_length = info->line_length * info->height_mm;
 
+	memcpy(&global_screeninfo, info, sizeof(struct image_screeninfo));
+
 	return 1;
 }
 
@@ -225,6 +229,7 @@ static void create_file(const char *path, size_t length) {
 		weston_log("Failed to chmod file %s\n", path);
 		return;
 	}
+	weston_log("Created file %s with size %zu\n", path, length);
 }
 
 /* Returns an FD for the frame buffer device. */
@@ -805,11 +810,15 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 	const struct weston_option image_options[] = {
 		{ WESTON_OPTION_STRING, "device", 0, &param.device },
 		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &param.use_gl },
-		{ WESTON_OPTION_INTEGER, "width", 800, &global_screeninfo.x_resolution },
-		{ WESTON_OPTION_INTEGER, "height", 600, &global_screeninfo.y_resolution },
+		{ WESTON_OPTION_INTEGER, "width", 0, &global_screeninfo.x_resolution },
+		{ WESTON_OPTION_INTEGER, "height", 0, &global_screeninfo.y_resolution },
 	};
 
 	parse_options(image_options, ARRAY_LENGTH(image_options), argc, argv);
+
+	weston_log("Options device %s use-gl %d width %d height %d\n",
+		param.device, param.use_gl,
+		global_screeninfo.x_resolution, global_screeninfo.y_resolution);
 
 	b = image_backend_create(compositor, argc, argv, config, &param);
 	if (b == NULL)
