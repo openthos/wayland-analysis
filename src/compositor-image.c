@@ -139,6 +139,57 @@ image_output_start_repaint_loop(struct weston_output *output)
 	weston_output_finish_frame(output, &ts, PRESENTATION_FEEDBACK_INVALID);
 }
 
+static char *view_filter = NULL;
+
+static void
+save_surface(struct weston_surface *surface, void *pixels)
+{
+	int width, height;
+	char desc[512];
+	const size_t bytespp = 4; /* PIXMAN_a8b8g8r8 */
+	size_t sz;
+	int ret;
+
+	if (!surface) return;
+
+	weston_surface_get_content_size(surface, &width, &height);
+
+	if (!surface->get_label ||
+	    surface->get_label(surface, desc, sizeof(desc)) < 0)
+		return;
+
+	weston_log("find surface with label: %s\n", desc);
+
+	if (strstr(desc, view_filter) == 0) // only save view matching filter
+	    return;
+
+	weston_log("surface screenshot of %p: '%s', %dx%d\n",
+		   surface, desc, width, height);
+
+	sz = width * bytespp * height;
+	if (sz == 0) {
+		weston_log("no content for %p\n", surface);
+		return;
+	}
+
+	ret = weston_surface_copy_content(surface, pixels, sz,
+					  0, 0, width, height);
+	if (ret < 0) {
+		weston_log("shooting surface %p failed\n", surface);
+	}
+}
+
+static void
+save_views(struct weston_output *output, void *pixels)
+{
+	struct weston_compositor *compositor = output->compositor;
+	struct weston_view *view;
+
+	wl_list_for_each_reverse(view, &compositor->view_list, link) {
+	    save_surface(view->surface, pixels);
+	}
+}
+
 static int
 image_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 {
@@ -163,6 +214,10 @@ image_output_repaint(struct weston_output *base, pixman_region32_t *damage)
 			   output->fb_tmp + j * global_screeninfo.line_length,
 			   global_screeninfo.line_length);
 		}
+	}
+
+	if (view_filter) {
+	    save_views(base, output->fb);
 	}
 
 	/* Update the damage region. */
@@ -816,6 +871,7 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 
 	const struct weston_option image_options[] = {
 		{ WESTON_OPTION_STRING, "device", 0, &param.device },
+		{ WESTON_OPTION_STRING, "view-filter", 0, &view_filter },
 		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &param.use_gl },
 		{ WESTON_OPTION_INTEGER, "width", 0, &global_screeninfo.x_resolution },
 		{ WESTON_OPTION_INTEGER, "height", 0, &global_screeninfo.y_resolution },
