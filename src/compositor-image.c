@@ -869,9 +869,12 @@ backend_init(struct weston_compositor *compositor, int *argc, char *argv[],
 		.use_gl = 0,
 	};
 
+	extern char *socket_path;
+
 	const struct weston_option image_options[] = {
 		{ WESTON_OPTION_STRING, "device", 0, &param.device },
 		{ WESTON_OPTION_STRING, "view-filter", 0, &view_filter },
+		{ WESTON_OPTION_STRING, "input-socket", 0, &socket_path },
 		{ WESTON_OPTION_BOOLEAN, "use-gl", 0, &param.use_gl },
 		{ WESTON_OPTION_INTEGER, "width", 0, &global_screeninfo.x_resolution },
 		{ WESTON_OPTION_INTEGER, "height", 0, &global_screeninfo.y_resolution },

@@ -10,7 +10,7 @@
 #include "socket-input.h"
 #include "shared/helpers.h"
 
-#define SOCKET_PATH "/tmp/weston_socket"
+char *socket_path = "/tmp/weston_socket";
 #define SERVER_HELLO "ServerHello"
 #define CLIENT_HELLO "ClientHello"
 
@@ -179,15 +179,15 @@ int socket_input_init(struct socket_input *input, struct weston_compositor *c,
 
 	input->compositor = c;
 
-	input->socket_fd = socket_local_server(SOCKET_PATH,
+	input->socket_fd = socket_local_server(socket_path,
             ANDROID_SOCKET_NAMESPACE_FILESYSTEM, AF_LOCAL);
 
 	if (input->socket_fd == -1) {
-        weston_log("Failed to listen on %s\n", SOCKET_PATH);
+        weston_log("Failed to listen on %s\n", socket_path);
 		return -1;
 	}
 
-    weston_log("Socket input listen on %s\n", SOCKET_PATH);
+    weston_log("Socket input listen on %s\n", socket_path);
 
     socket_input_seat_init(input, seat_id);
 
