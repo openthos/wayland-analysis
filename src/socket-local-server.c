@@ -25,6 +25,7 @@
 #include <sys/un.h>
 #include <sys/select.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 
 #include "sockets.h"
@@ -118,6 +119,11 @@ static int socket_local_server_bind(int s, const char *name, int namespaceId)
 
     if(bind(s, (struct sockaddr *) &addr, alen) < 0) {
         return -1;
+    }
+
+    if (chmod(name, 0777) < 0) {
+        weston_log("Failed to chmod file %s\n", name);
+        return;
     }
 
     return s;
