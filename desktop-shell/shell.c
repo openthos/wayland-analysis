@@ -4087,6 +4087,8 @@ create_xdg_surface(struct shell_client *owner, void *shell,
 
 	set_type(shsurf, SHELL_SURFACE_TOPLEVEL);
 
+	shell_interface_set_maximized(shsurf);
+
 	return shsurf;
 }
 
