@@ -272,7 +272,8 @@ static void create_file(const char *path, size_t length) {
 		weston_log("Failed to create file %s when zalloc %zu\n", path, length);
 		return;
 	}
-	int fd = open(path, O_RDWR | O_CLOEXEC | O_CREAT);
+//	int fd = open(path, O_RDWR | O_CLOEXEC | O_CREAT);
+	int fd = open(path, O_RDWR | O_CLOEXEC);	
 	if (fd < 0) {
 		weston_log("Failed to create file %s when open\n", path);
 		return;
@@ -314,7 +315,8 @@ image_frame_buffer_open(struct image_output *output, const char *fb_dev,
 	create_file(fb_dev, screen_info->buffer_length);
 
 	/* Open the frame buffer device. */
-	fd = open(fb_dev, O_RDWR | O_CLOEXEC | O_CREAT);
+	//fd = open(fb_dev, O_RDWR | O_CLOEXEC | O_CREAT);
+	fd = open(fb_dev, O_RDWR | O_CLOEXEC);	
 	if (fd < 0) {
 		weston_log("Failed to open frame buffer device ‘%s’: %s\n",
 		           fb_dev, strerror(errno));
