@@ -26,8 +26,10 @@
 #include "config.h"
 
 #include <assert.h>
+#include <stdint.h>
 
-#include "src/compositor.h"
+#include "compositor.h"
+#include "compositor/weston.h"
 
 static void
 surface_to_from_global(void *data)
@@ -78,7 +80,8 @@ surface_to_from_global(void *data)
 }
 
 WL_EXPORT int
-module_init(struct weston_compositor *compositor, int *argc, char *argv[])
+wet_module_init(struct weston_compositor *compositor,
+		int *argc, char *argv[])
 {
 	struct wl_event_loop *loop;
 

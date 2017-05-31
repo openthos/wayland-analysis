@@ -23,12 +23,16 @@
  * SOFTWARE.
  */
 
+#include "config.h"
+
 #include <time.h>
 #include <assert.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
 
+#include "ivi-shell.h"
 #include "ivi-layout-export.h"
 #include "ivi-layout-private.h"
 
@@ -56,6 +60,10 @@ struct ivi_layout_transition {
 
 struct transition_node {
 	struct ivi_layout_transition *transition;
+
+	/* ivi_layout::pending_transition_list
+	 * ivi_layout_transition_set::transition_list
+	 */
 	struct wl_list link;
 };
 
@@ -97,6 +105,22 @@ is_surface_transition(struct ivi_layout_surface *surface)
 	}
 
 	return 0;
+}
+
+void
+ivi_layout_remove_all_surface_transitions(struct ivi_layout_surface *surface)
+{
+	struct ivi_layout *layout = get_instance();
+	struct transition_node *node;
+	struct transition_node *tmp;
+	struct ivi_layout_transition *tran;
+
+	wl_list_for_each_safe(node, tmp, &layout->transitions->transition_list, link) {
+		tran = node->transition;
+		if (tran->is_transition_func(tran->private_data, surface)) {
+			layout_transition_destroy(tran);
+		}
+	};
 }
 
 static void
@@ -284,7 +308,9 @@ transition_move_resize_view_destroy(struct ivi_layout_transition *transition)
 		(struct move_resize_view_data *)transition->private_data;
 	struct ivi_layout_surface *layout_surface = data->surface;
 
-	wl_signal_emit(&layout_surface->configured, layout_surface);
+	shell_surface_send_configure(layout_surface->surface,
+				     layout_surface->prop.dest_width,
+				     layout_surface->prop.dest_height);
 
 	if (transition->private_data) {
 		free(transition->private_data);
@@ -418,7 +444,7 @@ ivi_layout_transition_move_resize_view(struct ivi_layout_surface *surface,
 		transition_move_resize_view_destroy,
 		duration);
 
-	if(transition && layout_transition_register(transition))
+	if (transition && layout_transition_register(transition))
 		return;
 	layout_transition_destroy(transition);
 }
@@ -539,8 +565,8 @@ ivi_layout_transition_visibility_on(struct ivi_layout_surface *surface,
 				    uint32_t duration)
 {
 	struct ivi_layout_transition *transition;
-	bool is_visible = ivi_layout_surface_get_visibility(surface);
-	wl_fixed_t dest_alpha = ivi_layout_surface_get_opacity(surface);
+	bool is_visible = surface->prop.visibility;
+	wl_fixed_t dest_alpha = surface->prop.opacity;
 	struct store_alpha *user_data = NULL;
 	wl_fixed_t start_alpha = 0.0;
 	struct fade_view_data *data = NULL;
@@ -549,7 +575,7 @@ ivi_layout_transition_visibility_on(struct ivi_layout_surface *surface,
 					IVI_LAYOUT_TRANSITION_VIEW_FADE,
 					surface);
 	if (transition) {
-		start_alpha = ivi_layout_surface_get_opacity(surface);
+		start_alpha = surface->prop.opacity;
 		user_data = transition->user_data;
 		data = transition->private_data;
 
@@ -604,7 +630,7 @@ ivi_layout_transition_visibility_off(struct ivi_layout_surface *surface,
 				     uint32_t duration)
 {
 	struct ivi_layout_transition *transition;
-	wl_fixed_t start_alpha = ivi_layout_surface_get_opacity(surface);
+	wl_fixed_t start_alpha = surface->prop.opacity;
 	struct store_alpha* user_data = NULL;
 	struct fade_view_data* data = NULL;
 
@@ -664,7 +690,8 @@ transition_move_layer_user_frame(struct ivi_layout_transition *transition)
 	const int32_t dest_y = data->start_y +
 		(data->end_y - data->start_y) * current;
 
-	ivi_layout_layer_set_position(layer, dest_x, dest_y);
+	ivi_layout_layer_set_destination_rectangle(layer, dest_x, dest_y,
+			layer->prop.dest_width, layer->prop.dest_height);
 }
 
 static void
@@ -736,11 +763,9 @@ ivi_layout_transition_move_layer(struct ivi_layout_layer *layer,
 				 int32_t dest_x, int32_t dest_y,
 				 uint32_t duration)
 {
-	int32_t start_pos_x = 0;
-	int32_t start_pos_y = 0;
+	int32_t start_pos_x = layer->prop.dest_x;
+	int32_t start_pos_y = layer->prop.dest_y;
 	struct ivi_layout_transition *transition = NULL;
-
-	ivi_layout_layer_get_position(layer, &start_pos_x, &start_pos_y);
 
 	transition = create_move_layer_transition(
 		layer,
@@ -831,7 +856,7 @@ ivi_layout_transition_fade_layer(
 		data = transition->private_data;
 
 		/* FIXME */
-		fixed_opacity = ivi_layout_layer_get_opacity(layer);
+		fixed_opacity = layer->prop.opacity;
 		now_opacity = wl_fixed_to_double(fixed_opacity);
 		remain = 0.0;
 

@@ -25,6 +25,7 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <ctype.h>
@@ -33,6 +34,7 @@
 #include <linux/input.h>
 
 #include "compositor.h"
+#include "compositor/weston.h"
 #include "file-util.h"
 
 static char *
@@ -212,8 +214,8 @@ out:
 }
 
 WL_EXPORT int
-module_init(struct weston_compositor *ec,
-	    int *argc, char *argv[])
+wet_module_init(struct weston_compositor *ec,
+		int *argc, char *argv[])
 {
 	weston_compositor_add_debug_binding(ec, KEY_H, trigger_binding, ec);
 

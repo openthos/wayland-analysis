@@ -25,19 +25,21 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <signal.h>
 #include <unistd.h>
 #include <string.h>
 
-#include "src/compositor.h"
+#include "compositor.h"
+#include "compositor/weston.h"
 #include "weston-test-server-protocol.h"
 
 #ifdef ENABLE_EGL
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include "src/weston-egl-ext.h"
+#include "weston-egl-ext.h"
 #endif /* ENABLE_EGL */
 
 #include "shared/helpers.h"
@@ -89,9 +91,9 @@ notify_pointer_position(struct weston_test *test, struct wl_resource *resource)
 }
 
 static void
-test_surface_configure(struct weston_surface *surface, int32_t sx, int32_t sy)
+test_surface_committed(struct weston_surface *surface, int32_t sx, int32_t sy)
 {
-	struct weston_test_surface *test_surface = surface->configure_private;
+	struct weston_test_surface *test_surface = surface->committed_private;
 	struct weston_test *test = test_surface->test;
 
 	if (wl_list_empty(&test_surface->view->layer_link.link))
@@ -102,6 +104,9 @@ test_surface_configure(struct weston_surface *surface, int32_t sx, int32_t sy)
 				 test_surface->x, test_surface->y);
 
 	weston_view_update_transform(test_surface->view);
+
+	test_surface->surface->is_mapped = true;
+	test_surface->view->is_mapped = true;
 }
 
 static void
@@ -113,7 +118,7 @@ move_surface(struct wl_client *client, struct wl_resource *resource,
 		wl_resource_get_user_data(surface_resource);
 	struct weston_test_surface *test_surface;
 
-	test_surface = surface->configure_private;
+	test_surface = surface->committed_private;
 	if (!test_surface) {
 		test_surface = malloc(sizeof *test_surface);
 		if (!test_surface) {
@@ -128,8 +133,8 @@ move_surface(struct wl_client *client, struct wl_resource *resource,
 			return;
 		}
 
-		surface->configure_private = test_surface;
-		surface->configure = test_surface_configure;
+		surface->committed_private = test_surface;
+		surface->committed = test_surface_committed;
 	}
 
 	test_surface->surface = surface;
@@ -181,13 +186,13 @@ activate_surface(struct wl_client *client, struct wl_resource *resource,
 	seat = get_seat(test);
 	keyboard = weston_seat_get_keyboard(seat);
 	if (surface) {
-		weston_surface_activate(surface, seat);
+		weston_seat_set_keyboard_focus(seat, surface);
 		notify_keyboard_focus_in(seat, &keyboard->keys,
 					 STATE_UPDATE_AUTOMATIC);
 	}
 	else {
 		notify_keyboard_focus_out(seat);
-		weston_surface_activate(surface, seat);
+		weston_seat_set_keyboard_focus(seat, surface);
 	}
 }
 
@@ -237,47 +242,6 @@ device_add(struct wl_client *client,
 	} else {
 		assert(0 && "Unsupported device");
 	}
-}
-
-#ifdef ENABLE_EGL
-static int
-is_egl_buffer(struct wl_resource *resource)
-{
-	PFNEGLQUERYWAYLANDBUFFERWL query_buffer =
-		(void *) eglGetProcAddress("eglQueryWaylandBufferWL");
-	EGLint format;
-
-	if (query_buffer(eglGetCurrentDisplay(),
-			 resource,
-			 EGL_TEXTURE_FORMAT,
-			 &format))
-		return 1;
-
-	return 0;
-}
-#endif /* ENABLE_EGL */
-
-static void
-get_n_buffers(struct wl_client *client, struct wl_resource *resource)
-{
-	int n_buffers = 0;
-
-#ifdef ENABLE_EGL
-	struct wl_resource *buffer_resource;
-	int i;
-
-	for (i = 0; i < 1000; i++) {
-		buffer_resource = wl_client_get_object(client, i);
-
-		if (buffer_resource == NULL)
-			continue;
-
-		if (is_egl_buffer(buffer_resource))
-			n_buffers++;
-	}
-#endif /* ENABLE_EGL */
-
-	weston_test_send_n_egl_buffers(resource, n_buffers);
 }
 
 enum weston_test_screenshot_outcome {
@@ -530,7 +494,6 @@ static const struct weston_test_interface test_implementation = {
 	send_key,
 	device_release,
 	device_add,
-	get_n_buffers,
 	capture_screenshot,
 };
 
@@ -580,8 +543,8 @@ idle_launch_client(void *data)
 }
 
 WL_EXPORT int
-module_init(struct weston_compositor *ec,
-	    int *argc, char *argv[])
+wet_module_init(struct weston_compositor *ec,
+		int *argc, char *argv[])
 {
 	struct weston_test *test;
 	struct wl_event_loop *loop;
@@ -591,7 +554,8 @@ module_init(struct weston_compositor *ec,
 		return -1;
 
 	test->compositor = ec;
-	weston_layer_init(&test->layer, &ec->cursor_layer.link);
+	weston_layer_init(&test->layer, ec);
+	weston_layer_set_position(&test->layer, WESTON_LAYER_POSITION_CURSOR - 1);
 
 	if (wl_global_create(ec->wl_display, &weston_test_interface, 1,
 			     test, bind_test) == NULL)
@@ -602,7 +566,8 @@ module_init(struct weston_compositor *ec,
 
 	/* add devices */
 	weston_seat_init_pointer(&test->seat);
-	weston_seat_init_keyboard(&test->seat, NULL);
+	if (weston_seat_init_keyboard(&test->seat, NULL) < 0)
+		return -1;
 	weston_seat_init_touch(&test->seat);
 
 	loop = wl_display_get_event_loop(ec->wl_display);

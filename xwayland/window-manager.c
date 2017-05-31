@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -34,13 +35,16 @@
 #include <errno.h>
 #include <unistd.h>
 #include <signal.h>
+#include <limits.h>
+#include <assert.h>
 #include <X11/Xcursor/Xcursor.h>
 #include <linux/input.h>
 
+#include "compositor.h"
 #include "xwayland.h"
+#include "xwayland-internal-interface.h"
 
 #include "cairo-util.h"
-#include "compositor.h"
 #include "hash.h"
 #include "shared/helpers.h"
 
@@ -123,6 +127,11 @@ struct motif_wm_hints {
 #define _NET_WM_MOVERESIZE_MOVE_KEYBOARD    10   /* move via keyboard */
 #define _NET_WM_MOVERESIZE_CANCEL           11   /* cancel operation */
 
+struct weston_output_weak_ref {
+	struct weston_output *output;
+	struct wl_listener destroy_listener;
+};
+
 struct weston_wm_window {
 	struct weston_wm *wm;
 	xcb_window_t id;
@@ -131,7 +140,7 @@ struct weston_wm_window {
 	cairo_surface_t *cairo_surface;
 	uint32_t surface_id;
 	struct weston_surface *surface;
-	struct shell_surface *shsurf;
+	struct weston_desktop_xwayland_surface *shsurf;
 	struct wl_listener surface_destroy_listener;
 	struct wl_event_source *repaint_source;
 	struct wl_event_source *configure_source;
@@ -144,8 +153,12 @@ struct weston_wm_window {
 	uint32_t protocols;
 	xcb_atom_t type;
 	int width, height;
-	int x, y;
+	int x;
+	int y;
 	bool pos_dirty;
+	int map_request_x;
+	int map_request_y;
+	struct weston_output_weak_ref legacy_fullscreen_output;
 	int saved_width, saved_height;
 	int decorate;
 	int override_redirect;
@@ -167,6 +180,11 @@ weston_wm_set_net_active_window(struct weston_wm *wm, xcb_window_t window);
 
 static void
 weston_wm_window_schedule_repaint(struct weston_wm_window *window);
+
+static int
+legacy_fullscreen(struct weston_wm *wm,
+		  struct weston_wm_window *window,
+		  struct weston_output **output_ret);
 
 static void
 xserver_map_shell_surface(struct weston_wm_window *window,
@@ -204,6 +222,47 @@ wm_log_continue(const char *fmt, ...)
 #else
 	return 0;
 #endif
+}
+
+static void
+weston_output_weak_ref_init(struct weston_output_weak_ref *ref)
+{
+	ref->output = NULL;
+}
+
+static void
+weston_output_weak_ref_clear(struct weston_output_weak_ref *ref)
+{
+	if (!ref->output)
+		return;
+
+	wl_list_remove(&ref->destroy_listener.link);
+	ref->output = NULL;
+}
+
+static void
+weston_output_weak_ref_handle_destroy(struct wl_listener *listener, void *data)
+{
+	struct weston_output_weak_ref *ref;
+
+	ref = wl_container_of(listener, ref, destroy_listener);
+	assert(ref->output == data);
+
+	weston_output_weak_ref_clear(ref);
+}
+
+static void
+weston_output_weak_ref_set(struct weston_output_weak_ref *ref,
+			   struct weston_output *output)
+{
+	weston_output_weak_ref_clear(ref);
+
+	if (!output)
+		return;
+
+	ref->destroy_listener.notify = weston_output_weak_ref_handle_destroy;
+	wl_signal_add(&output->destroy_signal, &ref->destroy_listener);
+	ref->output = output;
 }
 
 static bool __attribute__ ((warn_unused_result))
@@ -384,7 +443,10 @@ read_and_dump_property(struct weston_wm *wm,
 	free(reply);
 }
 
-/* We reuse some predefined, but otherwise useles atoms */
+/* We reuse some predefined, but otherwise useles atoms
+ * as local type placeholders that never touch the X11 server,
+ * to make weston_wm_window_read_properties() less exceptional.
+ */
 #define TYPE_WM_PROTOCOLS	XCB_ATOM_CUT_BUFFER0
 #define TYPE_MOTIF_WM_HINTS	XCB_ATOM_CUT_BUFFER1
 #define TYPE_NET_WM_STATE	XCB_ATOM_CUT_BUFFER2
@@ -394,26 +456,24 @@ static void
 weston_wm_window_read_properties(struct weston_wm_window *window)
 {
 	struct weston_wm *wm = window->wm;
-	struct weston_shell_interface *shell_interface =
-		&wm->server->compositor->shell_interface;
 
-#define F(field) offsetof(struct weston_wm_window, field)
+#define F(field) (&window->field)
 	const struct {
 		xcb_atom_t atom;
 		xcb_atom_t type;
-		int offset;
+		void *ptr;
 	} props[] = {
-		{ XCB_ATOM_WM_CLASS, XCB_ATOM_STRING, F(class) },
-		{ XCB_ATOM_WM_NAME, XCB_ATOM_STRING, F(name) },
-		{ XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, F(transient_for) },
-		{ wm->atom.wm_protocols, TYPE_WM_PROTOCOLS, F(protocols) },
-		{ wm->atom.wm_normal_hints, TYPE_WM_NORMAL_HINTS, F(protocols) },
-		{ wm->atom.net_wm_state, TYPE_NET_WM_STATE },
-		{ wm->atom.net_wm_window_type, XCB_ATOM_ATOM, F(type) },
-		{ wm->atom.net_wm_name, XCB_ATOM_STRING, F(name) },
-		{ wm->atom.net_wm_pid, XCB_ATOM_CARDINAL, F(pid) },
-		{ wm->atom.motif_wm_hints, TYPE_MOTIF_WM_HINTS, 0 },
-		{ wm->atom.wm_client_machine, XCB_ATOM_WM_CLIENT_MACHINE, F(machine) },
+		{ XCB_ATOM_WM_CLASS,           XCB_ATOM_STRING,            F(class) },
+		{ XCB_ATOM_WM_NAME,            XCB_ATOM_STRING,            F(name) },
+		{ XCB_ATOM_WM_TRANSIENT_FOR,   XCB_ATOM_WINDOW,            F(transient_for) },
+		{ wm->atom.wm_protocols,       TYPE_WM_PROTOCOLS,          NULL },
+		{ wm->atom.wm_normal_hints,    TYPE_WM_NORMAL_HINTS,       NULL },
+		{ wm->atom.net_wm_state,       TYPE_NET_WM_STATE,          NULL },
+		{ wm->atom.net_wm_window_type, XCB_ATOM_ATOM,              F(type) },
+		{ wm->atom.net_wm_name,        XCB_ATOM_STRING,            F(name) },
+		{ wm->atom.net_wm_pid,         XCB_ATOM_CARDINAL,          F(pid) },
+		{ wm->atom.motif_wm_hints,     TYPE_MOTIF_WM_HINTS,        NULL },
+		{ wm->atom.wm_client_machine,  XCB_ATOM_WM_CLIENT_MACHINE, F(machine) },
 	};
 #undef F
 
@@ -452,7 +512,7 @@ weston_wm_window_read_properties(struct weston_wm_window *window)
 			continue;
 		}
 
-		p = ((char *) window + props[i].offset);
+		p = props[i].ptr;
 
 		switch (props[i].type) {
 		case XCB_ATOM_WM_CLIENT_MACHINE:
@@ -537,14 +597,12 @@ weston_wm_window_read_properties(struct weston_wm_window *window)
 		if (!window->machine || strcmp(window->machine, name))
 			window->pid = 0;
 	}
-
-	if (window->shsurf && window->name)
-		shell_interface->set_title(window->shsurf, window->name);
-	if (window->frame && window->name)
-		frame_set_title(window->frame, window->name);
-	if (window->shsurf && window->pid > 0)
-		shell_interface->set_pid(window->shsurf, window->pid);
 }
+
+#undef TYPE_WM_PROTOCOLS
+#undef TYPE_MOTIF_WM_HINTS
+#undef TYPE_NET_WM_STATE
+#undef TYPE_WM_NORMAL_HINTS
 
 static void
 weston_wm_window_get_frame_size(struct weston_wm_window *window,
@@ -683,10 +741,11 @@ weston_wm_handle_configure_notify(struct weston_wm *wm, xcb_generic_event_t *eve
 		(xcb_configure_notify_event_t *) event;
 	struct weston_wm_window *window;
 
-	wm_log("XCB_CONFIGURE_NOTIFY (window %d) %d,%d @ %dx%d\n",
+	wm_log("XCB_CONFIGURE_NOTIFY (window %d) %d,%d @ %dx%d%s\n",
 	       configure_notify->window,
 	       configure_notify->x, configure_notify->y,
-	       configure_notify->width, configure_notify->height);
+	       configure_notify->width, configure_notify->height,
+	       configure_notify->override_redirect ? ", override" : "");
 
 	if (!wm_lookup_window(wm, configure_notify->window, &window))
 		return;
@@ -727,6 +786,8 @@ weston_wm_create_surface(struct wl_listener *listener, void *data)
 
 	if (wl_resource_get_client(surface->resource) != wm->server->client)
 		return;
+
+	wm_log("XWM: create weston_surface %p\n", surface);
 
 	wl_list_for_each(window, &wm->unpaired_window_list, link)
 		if (window->surface_id ==
@@ -778,7 +839,8 @@ weston_wm_send_focus_window(struct weston_wm *wm,
 static void
 weston_wm_window_activate(struct wl_listener *listener, void *data)
 {
-	struct weston_surface *surface = data;
+	struct weston_surface_activation_data *activation_data = data;
+	struct weston_surface *surface = activation_data->surface;
 	struct weston_wm_window *window = NULL;
 	struct weston_wm *wm =
 		container_of(listener, struct weston_wm, activate_listener);
@@ -809,6 +871,37 @@ weston_wm_window_activate(struct wl_listener *listener, void *data)
 
 	xcb_flush(wm->conn);
 
+}
+
+/** Control Xwayland wl_surface.commit behaviour
+ *
+ * This function sets the "_XWAYLAND_ALLOW_COMMITS" property of the frame window
+ * (not the content window!) to \p allow.
+ *
+ * If the property is set to \c true, Xwayland will commit whenever it likes.
+ * If the property is set to \c false, Xwayland will not commit.
+ * If the property is not set at all, Xwayland assumes it is \c true.
+ *
+ * \param window The XWM window to control.
+ * \param allow Whether Xwayland is allowed to wl_surface.commit for the window.
+ */
+static void
+weston_wm_window_set_allow_commits(struct weston_wm_window *window, bool allow)
+{
+	struct weston_wm *wm = window->wm;
+	uint32_t property[1];
+
+	assert(window->frame_id != XCB_WINDOW_NONE);
+
+	property[0] = allow ? 1 : 0;
+
+	xcb_change_property(wm->conn,
+			    XCB_PROP_MODE_REPLACE,
+			    window->frame_id,
+			    wm->atom.allow_commits,
+			    XCB_ATOM_CARDINAL,
+			    32, /* format */
+			    1, property);
 }
 
 #define ICCCM_WITHDRAWN_STATE	0
@@ -948,6 +1041,7 @@ weston_wm_handle_map_request(struct weston_wm *wm, xcb_generic_event_t *event)
 	xcb_map_request_event_t *map_request =
 		(xcb_map_request_event_t *) event;
 	struct weston_wm_window *window;
+	struct weston_output *output;
 
 	if (our_resource(wm, map_request->window)) {
 		wm_log("XCB_MAP_REQUEST (window %d, ours)\n",
@@ -960,18 +1054,49 @@ weston_wm_handle_map_request(struct weston_wm *wm, xcb_generic_event_t *event)
 
 	weston_wm_window_read_properties(window);
 
+	/* For a new Window, MapRequest happens before the Window is realized
+	 * in Xwayland. We do the real xcb_map_window() here as a response to
+	 * MapRequest. The Window will get realized (wl_surface created in
+	 * Wayland and WL_SURFACE_ID sent in X11) when it has been mapped for
+	 * real.
+	 *
+	 * MapRequest only happens for (X11) unmapped Windows. On UnmapNotify,
+	 * we reset shsurf to NULL, so even if X11 connection races far ahead
+	 * of the Wayland connection and the X11 client is repeatedly mapping
+	 * and unmapping, we will never have shsurf set on MapRequest.
+	 */
+	assert(!window->shsurf);
+
+	window->map_request_x = window->x;
+	window->map_request_y = window->y;
+
 	if (window->frame_id == XCB_WINDOW_NONE)
-		weston_wm_window_create_frame(window);
+		weston_wm_window_create_frame(window); /* sets frame_id */
+	assert(window->frame_id != XCB_WINDOW_NONE);
 
-	wm_log("XCB_MAP_REQUEST (window %d, %p, frame %d)\n",
-	       window->id, window, window->frame_id);
+	wm_log("XCB_MAP_REQUEST (window %d, %p, frame %d, %dx%d @ %d,%d)\n",
+	       window->id, window, window->frame_id,
+	       window->width, window->height,
+	       window->map_request_x, window->map_request_y);
 
+	weston_wm_window_set_allow_commits(window, false);
 	weston_wm_window_set_wm_state(window, ICCCM_NORMAL_STATE);
 	weston_wm_window_set_net_wm_state(window);
 	weston_wm_window_set_virtual_desktop(window, 0);
 
+	if (legacy_fullscreen(wm, window, &output)) {
+		window->fullscreen = 1;
+		weston_output_weak_ref_set(&window->legacy_fullscreen_output,
+					   output);
+	}
+
 	xcb_map_window(wm->conn, map_request->window);
 	xcb_map_window(wm->conn, window->frame_id);
+
+	/* Mapped in the X server, we can draw immediately.
+	 * Cannot set pending state though, no weston_surface until
+	 * xserver_map_shell_surface() time. */
+	weston_wm_window_schedule_repaint(window);
 }
 
 static void
@@ -985,7 +1110,8 @@ weston_wm_handle_map_notify(struct weston_wm *wm, xcb_generic_event_t *event)
 			return;
 	}
 
-	wm_log("XCB_MAP_NOTIFY (window %d)\n", map_notify->window);
+	wm_log("XCB_MAP_NOTIFY (window %d%s)\n", map_notify->window,
+	       map_notify->override_redirect ? ", override" : "");
 }
 
 static void
@@ -1033,25 +1159,14 @@ weston_wm_handle_unmap_notify(struct weston_wm *wm, xcb_generic_event_t *event)
 }
 
 static void
-weston_wm_window_draw_decoration(void *data)
+weston_wm_window_draw_decoration(struct weston_wm_window *window)
 {
-	struct weston_wm_window *window = data;
-	struct weston_wm *wm = window->wm;
-	struct theme *t = wm->theme;
 	cairo_t *cr;
-	int x, y, width, height;
-	int32_t input_x, input_y, input_w, input_h;
-	struct weston_shell_interface *shell_interface =
-		&wm->server->compositor->shell_interface;
-	uint32_t flags = 0;
-	struct weston_view *view;
+	int width, height;
 
-	weston_wm_window_read_properties(window);
-
-	window->repaint_source = NULL;
+	wm_log("XWM: draw decoration, win %d\n", window->id);
 
 	weston_wm_window_get_frame_size(window, &width, &height);
-	weston_wm_window_get_child_position(window, &x, &y);
 
 	cairo_xcb_surface_set_size(window->cairo_surface, width, height);
 	cr = cairo_create(window->cairo_surface);
@@ -1059,53 +1174,106 @@ weston_wm_window_draw_decoration(void *data)
 	if (window->fullscreen) {
 		/* nothing */
 	} else if (window->decorate) {
-		if (wm->focus_window == window)
-			flags |= THEME_FRAME_ACTIVE;
-
+		frame_set_title(window->frame, window->name);
 		frame_repaint(window->frame, cr);
 	} else {
 		cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
 		cairo_set_source_rgba(cr, 0, 0, 0, 0);
 		cairo_paint(cr);
 
-		render_shadow(cr, t->shadow, 2, 2, width + 8, height + 8, 64, 64);
+		render_shadow(cr, window->wm->theme->shadow,
+			      2, 2, width + 8, height + 8, 64, 64);
 	}
 
 	cairo_destroy(cr);
+	cairo_surface_flush(window->cairo_surface);
+	xcb_flush(window->wm->conn);
+}
 
-	if (window->surface) {
-		pixman_region32_fini(&window->surface->pending.opaque);
-		if (window->has_alpha) {
-			pixman_region32_init(&window->surface->pending.opaque);
-		} else {
-			/* We leave an extra pixel around the X window area to
-			 * make sure we don't sample from the undefined alpha
-			 * channel when filtering. */
-			pixman_region32_init_rect(&window->surface->pending.opaque,
-						  x - 1, y - 1,
-						  window->width + 2,
-						  window->height + 2);
-		}
-		wl_list_for_each(view, &window->surface->views, surface_link)
-			weston_view_geometry_dirty(view);
+static void
+weston_wm_window_set_pending_state(struct weston_wm_window *window)
+{
+	int x, y, width, height;
+	int32_t input_x, input_y, input_w, input_h;
+	const struct weston_desktop_xwayland_interface *xwayland_interface =
+		window->wm->server->compositor->xwayland_interface;
 
-		pixman_region32_fini(&window->surface->pending.input);
+	if (!window->surface)
+		return;
 
-		if (window->decorate && !window->fullscreen) {
-			frame_input_rect(window->frame, &input_x, &input_y,
-					 &input_w, &input_h);
-		} else {
-			input_x = x;
-			input_y = y;
-			input_w = width;
-			input_h = height;
-		}
+	weston_wm_window_get_frame_size(window, &width, &height);
+	weston_wm_window_get_child_position(window, &x, &y);
 
-		pixman_region32_init_rect(&window->surface->pending.input,
-					  input_x, input_y, input_w, input_h);
+	pixman_region32_fini(&window->surface->pending.opaque);
+	if (window->has_alpha) {
+		pixman_region32_init(&window->surface->pending.opaque);
+	} else {
+		/* We leave an extra pixel around the X window area to
+		 * make sure we don't sample from the undefined alpha
+		 * channel when filtering. */
+		pixman_region32_init_rect(&window->surface->pending.opaque,
+					  x - 1, y - 1,
+					  window->width + 2,
+					  window->height + 2);
+	}
 
-		shell_interface->set_window_geometry(window->shsurf,
-						     input_x, input_y, input_w, input_h);
+	if (window->decorate && !window->fullscreen) {
+		frame_input_rect(window->frame, &input_x, &input_y,
+				 &input_w, &input_h);
+	} else {
+		input_x = x;
+		input_y = y;
+		input_w = width;
+		input_h = height;
+	}
+
+	wm_log("XWM: win %d geometry: %d,%d %dx%d\n",
+	       window->id, input_x, input_y, input_w, input_h);
+
+	pixman_region32_fini(&window->surface->pending.input);
+	pixman_region32_init_rect(&window->surface->pending.input,
+				  input_x, input_y, input_w, input_h);
+
+	xwayland_interface->set_window_geometry(window->shsurf,
+						input_x, input_y,
+						input_w, input_h);
+	if (window->name)
+		xwayland_interface->set_title(window->shsurf, window->name);
+	if (window->pid > 0)
+		xwayland_interface->set_pid(window->shsurf, window->pid);
+}
+
+static void
+weston_wm_window_do_repaint(void *data)
+{
+	struct weston_wm_window *window = data;
+
+	window->repaint_source = NULL;
+
+	weston_wm_window_read_properties(window);
+
+	weston_wm_window_draw_decoration(window);
+	weston_wm_window_set_pending_state(window);
+}
+
+static void
+weston_wm_window_set_pending_state_OR(struct weston_wm_window *window)
+{
+	int width, height;
+
+	/* for override-redirect windows */
+	assert(window->frame_id == XCB_WINDOW_NONE);
+
+	if (!window->surface)
+		return;
+
+	weston_wm_window_get_frame_size(window, &width, &height);
+	pixman_region32_fini(&window->surface->pending.opaque);
+	if (window->has_alpha) {
+		pixman_region32_init(&window->surface->pending.opaque);
+	} else {
+		pixman_region32_init_rect(&window->surface->pending.opaque, 0, 0,
+					  width, height);
 	}
 }
 
@@ -1113,32 +1281,25 @@ static void
 weston_wm_window_schedule_repaint(struct weston_wm_window *window)
 {
 	struct weston_wm *wm = window->wm;
-	struct weston_view *view;
-	int width, height;
 
 	if (window->frame_id == XCB_WINDOW_NONE) {
-		if (window->surface != NULL) {
-			weston_wm_window_get_frame_size(window, &width, &height);
-			pixman_region32_fini(&window->surface->pending.opaque);
-			if (window->has_alpha) {
-				pixman_region32_init(&window->surface->pending.opaque);
-			} else {
-				pixman_region32_init_rect(&window->surface->pending.opaque, 0, 0,
-							  width, height);
-			}
-			wl_list_for_each(view, &window->surface->views, surface_link)
-				weston_view_geometry_dirty(view);
-		}
+		/* Override-redirect windows go through here, but we
+		 * cannot assert(window->override_redirect); because
+		 * we do not deal with changing OR flag yet.
+		 * XXX: handle OR flag changes in message handlers
+		 */
+		weston_wm_window_set_pending_state_OR(window);
 		return;
 	}
 
 	if (window->repaint_source)
 		return;
 
+	wm_log("XWM: schedule repaint, win %d\n", window->id);
+
 	window->repaint_source =
 		wl_event_loop_add_idle(wm->server->loop,
-				       weston_wm_window_draw_decoration,
-				       window);
+				       weston_wm_window_do_repaint, window);
 }
 
 static void
@@ -1155,7 +1316,8 @@ weston_wm_handle_property_notify(struct weston_wm *wm, xcb_generic_event_t *even
 
 	wm_log("XCB_PROPERTY_NOTIFY: window %d, ", property_notify->window);
 	if (property_notify->state == XCB_PROPERTY_DELETE)
-		wm_log("deleted\n");
+		wm_log_continue("deleted %s\n",
+				get_atom_name(wm->conn, property_notify->atom));
 	else
 		read_and_dump_property(wm, property_notify->window,
 				       property_notify->atom);
@@ -1195,6 +1357,9 @@ weston_wm_window_create(struct weston_wm *wm,
 	window->x = x;
 	window->y = y;
 	window->pos_dirty = false;
+	window->map_request_x = INT_MIN; /* out of range for valid positions */
+	window->map_request_y = INT_MIN; /* out of range for valid positions */
+	weston_output_weak_ref_init(&window->legacy_fullscreen_output);
 
 	geometry_reply = xcb_get_geometry_reply(wm->conn, geometry_cookie, NULL);
 	/* technically we should use XRender and check the visual format's
@@ -1210,6 +1375,8 @@ static void
 weston_wm_window_destroy(struct weston_wm_window *window)
 {
 	struct weston_wm *wm = window->wm;
+
+	weston_output_weak_ref_clear(&window->legacy_fullscreen_output);
 
 	if (window->repaint_source)
 		wl_event_source_remove(window->repaint_source);
@@ -1241,8 +1408,9 @@ weston_wm_handle_create_notify(struct weston_wm *wm, xcb_generic_event_t *event)
 	xcb_create_notify_event_t *create_notify =
 		(xcb_create_notify_event_t *) event;
 
-	wm_log("XCB_CREATE_NOTIFY (window %d, width %d, height %d%s%s)\n",
+	wm_log("XCB_CREATE_NOTIFY (window %d, at (%d, %d), width %d, height %d%s%s)\n",
 	       create_notify->window,
+	       create_notify->x, create_notify->y,
 	       create_notify->width, create_notify->height,
 	       create_notify->override_redirect ? ", override" : "",
 	       our_resource(wm, create_notify->window) ? ", ours" : "");
@@ -1284,10 +1452,11 @@ weston_wm_handle_reparent_notify(struct weston_wm *wm, xcb_generic_event_t *even
 		(xcb_reparent_notify_event_t *) event;
 	struct weston_wm_window *window;
 
-	wm_log("XCB_REPARENT_NOTIFY (window %d, parent %d, event %d)\n",
+	wm_log("XCB_REPARENT_NOTIFY (window %d, parent %d, event %d%s)\n",
 	       reparent_notify->window,
 	       reparent_notify->parent,
-	       reparent_notify->event);
+	       reparent_notify->event,
+	       reparent_notify->override_redirect ? ", override" : "");
 
 	if (reparent_notify->parent == wm->screen->root) {
 		weston_wm_window_create(wm, reparent_notify->window, 10, 10,
@@ -1303,8 +1472,10 @@ weston_wm_handle_reparent_notify(struct weston_wm *wm, xcb_generic_event_t *even
 struct weston_seat *
 weston_wm_pick_seat(struct weston_wm *wm)
 {
-	return container_of(wm->server->compositor->seat_list.next,
-			    struct weston_seat, link);
+	struct wl_list *seats = wm->server->compositor->seat_list.next;
+	if (wl_list_empty(seats))
+		return NULL;
+	return container_of(seats, struct weston_seat, link);
 }
 
 static struct weston_seat *
@@ -1350,8 +1521,8 @@ weston_wm_window_handle_moveresize(struct weston_wm_window *window,
 	struct weston_seat *seat = weston_wm_pick_seat_for_window(window);
 	struct weston_pointer *pointer = weston_seat_get_pointer(seat);
 	int detail;
-	struct weston_shell_interface *shell_interface =
-		&wm->server->compositor->shell_interface;
+	const struct weston_desktop_xwayland_interface *xwayland_interface =
+		wm->server->compositor->xwayland_interface;
 
 	if (!pointer || pointer->button_count != 1
 	    || !pointer->focus
@@ -1361,7 +1532,7 @@ weston_wm_window_handle_moveresize(struct weston_wm_window *window,
 	detail = client_message->data.data32[2];
 	switch (detail) {
 	case _NET_WM_MOVERESIZE_MOVE:
-		shell_interface->move(window->shsurf, pointer);
+		xwayland_interface->move(window->shsurf, pointer);
 		break;
 	case _NET_WM_MOVERESIZE_SIZE_TOPLEFT:
 	case _NET_WM_MOVERESIZE_SIZE_TOP:
@@ -1371,7 +1542,7 @@ weston_wm_window_handle_moveresize(struct weston_wm_window *window,
 	case _NET_WM_MOVERESIZE_SIZE_BOTTOM:
 	case _NET_WM_MOVERESIZE_SIZE_BOTTOMLEFT:
 	case _NET_WM_MOVERESIZE_SIZE_LEFT:
-		shell_interface->resize(window->shsurf, pointer, map[detail]);
+		xwayland_interface->resize(window->shsurf, pointer, map[detail]);
 		break;
 	case _NET_WM_MOVERESIZE_CANCEL:
 		break;
@@ -1413,10 +1584,10 @@ weston_wm_window_configure(void *data);
 static void
 weston_wm_window_set_toplevel(struct weston_wm_window *window)
 {
-	struct weston_shell_interface *shell_interface =
-		&window->wm->server->compositor->shell_interface;
+	const struct weston_desktop_xwayland_interface *xwayland_interface =
+		window->wm->server->compositor->xwayland_interface;
 
-	shell_interface->set_toplevel(window->shsurf);
+	xwayland_interface->set_toplevel(window->shsurf);
 	window->width = window->saved_width;
 	window->height = window->saved_height;
 	if (window->frame)
@@ -1437,8 +1608,8 @@ weston_wm_window_handle_state(struct weston_wm_window *window,
 			      xcb_client_message_event_t *client_message)
 {
 	struct weston_wm *wm = window->wm;
-	struct weston_shell_interface *shell_interface =
-		&wm->server->compositor->shell_interface;
+	const struct weston_desktop_xwayland_interface *xwayland_interface =
+		wm->server->compositor->xwayland_interface;
 	uint32_t action, property;
 	int maximized = weston_wm_window_is_maximized(window);
 
@@ -1453,9 +1624,8 @@ weston_wm_window_handle_state(struct weston_wm_window *window,
 			window->saved_height = window->height;
 
 			if (window->shsurf)
-				shell_interface->set_fullscreen(window->shsurf,
-								WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT,
-								0, NULL);
+				xwayland_interface->set_fullscreen(window->shsurf,
+								   NULL);
 		} else {
 			if (window->shsurf)
 				weston_wm_window_set_toplevel(window);
@@ -1474,7 +1644,7 @@ weston_wm_window_handle_state(struct weston_wm_window *window,
 				window->saved_height = window->height;
 
 				if (window->shsurf)
-					shell_interface->set_maximized(window->shsurf);
+					xwayland_interface->set_maximized(window->shsurf);
 			} else if (window->shsurf) {
 				weston_wm_window_set_toplevel(window);
 			}
@@ -1751,13 +1921,13 @@ static void
 weston_wm_handle_button(struct weston_wm *wm, xcb_generic_event_t *event)
 {
 	xcb_button_press_event_t *button = (xcb_button_press_event_t *) event;
-	struct weston_shell_interface *shell_interface =
-		&wm->server->compositor->shell_interface;
+	const struct weston_desktop_xwayland_interface *xwayland_interface =
+		wm->server->compositor->xwayland_interface;
 	struct weston_seat *seat;
 	struct weston_pointer *pointer;
 	struct weston_wm_window *window;
 	enum theme_location location;
-	enum frame_button_state button_state;
+	enum wl_pointer_button_state button_state;
 	uint32_t button_id;
 
 	wm_log("XCB_BUTTON_%s (detail %d)\n",
@@ -1775,7 +1945,8 @@ weston_wm_handle_button(struct weston_wm *wm, xcb_generic_event_t *event)
 	pointer = weston_seat_get_pointer(seat);
 
 	button_state = button->response_type == XCB_BUTTON_PRESS ?
-		FRAME_BUTTON_PRESSED : FRAME_BUTTON_RELEASED;
+		WL_POINTER_BUTTON_STATE_PRESSED :
+		WL_POINTER_BUTTON_STATE_RELEASED;
 	button_id = button->detail == 1 ? BTN_LEFT : BTN_RIGHT;
 
 	/* Make sure we're looking at the right location.  The frame
@@ -1792,13 +1963,13 @@ weston_wm_handle_button(struct weston_wm *wm, xcb_generic_event_t *event)
 
 	if (frame_status(window->frame) & FRAME_STATUS_MOVE) {
 		if (pointer)
-			shell_interface->move(window->shsurf, pointer);
+			xwayland_interface->move(window->shsurf, pointer);
 		frame_status_clear(window->frame, FRAME_STATUS_MOVE);
 	}
 
 	if (frame_status(window->frame) & FRAME_STATUS_RESIZE) {
 		if (pointer)
-			shell_interface->resize(window->shsurf, pointer, location);
+			xwayland_interface->resize(window->shsurf, pointer, location);
 		frame_status_clear(window->frame, FRAME_STATUS_RESIZE);
 	}
 
@@ -1813,7 +1984,7 @@ weston_wm_handle_button(struct weston_wm *wm, xcb_generic_event_t *event)
 		if (weston_wm_window_is_maximized(window)) {
 			window->saved_width = window->width;
 			window->saved_height = window->height;
-			shell_interface->set_maximized(window->shsurf);
+			xwayland_interface->set_maximized(window->shsurf);
 		} else {
 			weston_wm_window_set_toplevel(window);
 		}
@@ -1884,6 +2055,12 @@ static void
 weston_wm_handle_focus_in(struct weston_wm *wm, xcb_generic_event_t *event)
 {
 	xcb_focus_in_event_t *focus = (xcb_focus_in_event_t *) event;
+
+	/* Do not interfere with grabs */
+	if (focus->mode == XCB_NOTIFY_MODE_GRAB ||
+	    focus->mode == XCB_NOTIFY_MODE_UNGRAB)
+		return;
+
 	/* Do not let X clients change the focus behind the compositor's
 	 * back. Reset the focus to the old one if it changed. */
 	if (!wm->focus_window || focus->event != wm->focus_window->id)
@@ -2081,6 +2258,7 @@ weston_wm_get_resources(struct weston_wm *wm)
 		{ "XdndFinished",	F(atom.xdnd_finished) },
 		{ "XdndTypeList",	F(atom.xdnd_type_list) },
 		{ "XdndActionCopy",	F(atom.xdnd_action_copy) },
+		{ "_XWAYLAND_ALLOW_COMMITS",	F(atom.allow_commits) },
 		{ "WL_SURFACE_ID",	F(atom.wl_surface_id) }
 	};
 #undef F
@@ -2189,7 +2367,7 @@ weston_wm_create_wm_window(struct weston_wm *wm)
 			    32, /* format */
 			    1, &wm->wm_window);
 
-	/* Claim the WM_S0 selection even though we don't suport
+	/* Claim the WM_S0 selection even though we don't support
 	 * the --replace functionality. */
 	xcb_set_selection_owner(wm->conn,
 				wm->wm_window,
@@ -2331,6 +2509,12 @@ get_wm_window(struct weston_surface *surface)
 	return NULL;
 }
 
+static bool
+is_wm_window(struct weston_surface *surface)
+{
+	return get_wm_window(surface) != NULL;
+}
+
 static void
 weston_wm_window_configure(void *data)
 {
@@ -2429,9 +2613,8 @@ send_position(struct weston_surface *surface, int32_t x, int32_t y)
 	}
 }
 
-static const struct weston_shell_client shell_client = {
+static const struct weston_xwayland_client_interface shell_client = {
 	send_configure,
-	send_position
 };
 
 static int
@@ -2481,6 +2664,17 @@ legacy_fullscreen(struct weston_wm *wm,
 }
 
 static bool
+weston_wm_window_is_positioned(struct weston_wm_window *window)
+{
+	if (window->map_request_x == INT_MIN ||
+	    window->map_request_y == INT_MIN)
+		weston_log("XWM warning: win %d did not see map request\n",
+			   window->id);
+
+	return window->map_request_x != 0 || window->map_request_y != 0;
+}
+
+static bool
 weston_wm_window_type_inactive(struct weston_wm_window *window)
 {
 	struct weston_wm *wm = window->wm;
@@ -2498,12 +2692,21 @@ xserver_map_shell_surface(struct weston_wm_window *window,
 			  struct weston_surface *surface)
 {
 	struct weston_wm *wm = window->wm;
-	struct weston_shell_interface *shell_interface =
-		&wm->server->compositor->shell_interface;
-	struct weston_output *output;
+	struct weston_desktop_xwayland *xwayland =
+		wm->server->compositor->xwayland;
+	const struct weston_desktop_xwayland_interface *xwayland_interface =
+		wm->server->compositor->xwayland_interface;
 	struct weston_wm_window *parent;
-	int flags = 0;
 
+	/* This should be necessary only for override-redirected windows,
+	 * because otherwise MapRequest handler would have already updated
+	 * the properties. However, if X11 clients set properties after
+	 * sending MapWindow, here we can still process them. The decorations
+	 * have already been drawn once with the old property values, so if the
+	 * app changes something affecting decor after MapWindow, we glitch.
+	 * We only hit xserver_map_shell_surface() once per MapWindow and
+	 * wl_surface, so better ensure we get the window type right.
+	 */
 	weston_wm_window_read_properties(window);
 
 	/* A weston_wm_window may have many different surfaces assigned
@@ -2517,12 +2720,10 @@ xserver_map_shell_surface(struct weston_wm_window *window,
 	wl_signal_add(&window->surface->destroy_signal,
 		      &window->surface_destroy_listener);
 
-	weston_wm_window_schedule_repaint(window);
-
-	if (!shell_interface->create_shell_surface)
+	if (!xwayland_interface)
 		return;
 
-	if (window->surface->configure) {
+	if (window->surface->committed) {
 		weston_log("warning, unexpected in %s: "
 			   "surface's configure hook is already set.\n",
 			   __func__);
@@ -2530,50 +2731,65 @@ xserver_map_shell_surface(struct weston_wm_window *window,
 	}
 
 	window->shsurf =
-		shell_interface->create_shell_surface(shell_interface->shell,
-						      window->surface,
-						      &shell_client);
+		xwayland_interface->create_surface(xwayland,
+						   window->surface,
+						   &shell_client);
+
+	wm_log("XWM: map shell surface, win %d, weston_surface %p, xwayland surface %p\n",
+	       window->id, window->surface, window->shsurf);
 
 	if (window->name)
-		shell_interface->set_title(window->shsurf, window->name);
+		xwayland_interface->set_title(window->shsurf, window->name);
 	if (window->pid > 0)
-		shell_interface->set_pid(window->shsurf, window->pid);
+		xwayland_interface->set_pid(window->shsurf, window->pid);
 
 	if (window->fullscreen) {
 		window->saved_width = window->width;
 		window->saved_height = window->height;
-		shell_interface->set_fullscreen(window->shsurf,
-						WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT,
-						0, NULL);
+		xwayland_interface->set_fullscreen(window->shsurf,
+						   window->legacy_fullscreen_output.output);
 		return;
-	} else if (legacy_fullscreen(wm, window, &output)) {
-		window->fullscreen = 1;
-		shell_interface->set_fullscreen(window->shsurf,
-						WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT,
-						0, output);
 	} else if (window->override_redirect) {
-		shell_interface->set_xwayland(window->shsurf,
-					      window->x,
-					      window->y,
-					      WL_SHELL_SURFACE_TRANSIENT_INACTIVE);
+		xwayland_interface->set_xwayland(window->shsurf,
+						 window->x, window->y);
 	} else if (window->transient_for && window->transient_for->surface) {
 		parent = window->transient_for;
-		if (weston_wm_window_type_inactive(window))
-			flags = WL_SHELL_SURFACE_TRANSIENT_INACTIVE;
-		shell_interface->set_transient(window->shsurf,
-					       parent->surface,
-					       window->x - parent->x,
-					       window->y - parent->y, flags);
+		if (weston_wm_window_type_inactive(window)) {
+			xwayland_interface->set_transient(window->shsurf,
+							  parent->surface,
+							  window->x - parent->x,
+							  window->y - parent->y);
+		} else {
+			xwayland_interface->set_toplevel(window->shsurf);
+			xwayland_interface->set_parent(window->shsurf,
+						       parent->surface);
+		}
 	} else if (weston_wm_window_is_maximized(window)) {
-		shell_interface->set_maximized(window->shsurf);
+		xwayland_interface->set_maximized(window->shsurf);
 	} else {
 		if (weston_wm_window_type_inactive(window)) {
-			shell_interface->set_xwayland(window->shsurf,
-							window->x,
-							window->y,
-							WL_SHELL_SURFACE_TRANSIENT_INACTIVE);
+			xwayland_interface->set_xwayland(window->shsurf,
+							 window->x,
+							 window->y);
+		} else if (weston_wm_window_is_positioned(window)) {
+			xwayland_interface->set_toplevel_with_position(window->shsurf,
+								       window->map_request_x,
+								       window->map_request_y);
 		} else {
-			shell_interface->set_toplevel(window->shsurf);
+			xwayland_interface->set_toplevel(window->shsurf);
 		}
 	}
+
+	if (window->frame_id == XCB_WINDOW_NONE) {
+		weston_wm_window_set_pending_state_OR(window);
+	} else {
+		weston_wm_window_set_pending_state(window);
+		weston_wm_window_set_allow_commits(window, true);
+		xcb_flush(wm->conn);
+	}
 }
+
+const struct weston_xwayland_surface_api surface_api = {
+	is_wm_window,
+	send_position,
+};

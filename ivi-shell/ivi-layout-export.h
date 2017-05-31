@@ -25,9 +25,9 @@
 
 /**
  * The ivi-layout library supports API set of controlling properties of
- * surface and layer which groups surfaces. An unique ID whose type is integer
- * is required to create surface and layer. With the unique ID, surface and
- * layer are identified to control them. The API set consists of APIs to control
+ * surface and layer which groups surfaces. A unique ID whose type is integer is
+ * required to create surface and layer. With the unique ID, surface and layer
+ * are identified to control them. The API set consists of APIs to control
  * properties of surface and layers about followings,
  * - visibility.
  * - opacity.
@@ -54,6 +54,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
+
+#include <stdint.h>
 
 #include "stdbool.h"
 #include "compositor.h"
@@ -84,6 +86,7 @@ struct ivi_layout_surface_properties
 	bool visibility;
 	int32_t transition_type;
 	uint32_t transition_duration;
+	uint32_t event_mask;
 };
 
 struct ivi_layout_layer_properties
@@ -104,6 +107,7 @@ struct ivi_layout_layer_properties
 	double start_alpha;
 	double end_alpha;
 	uint32_t is_fade_in;
+	uint32_t event_mask;
 };
 
 enum ivi_layout_notification_mask {
@@ -136,43 +140,6 @@ enum ivi_layout_transition_type{
 	IVI_LAYOUT_TRANSITION_MAX,
 };
 
-typedef void (*layer_property_notification_func)(
-			struct ivi_layout_layer *ivilayer,
-			const struct ivi_layout_layer_properties *,
-			enum ivi_layout_notification_mask mask,
-			void *userdata);
-
-typedef void (*surface_property_notification_func)(
-			struct ivi_layout_surface *ivisurf,
-			const struct ivi_layout_surface_properties *,
-			enum ivi_layout_notification_mask mask,
-			void *userdata);
-
-typedef void (*layer_create_notification_func)(
-			struct ivi_layout_layer *ivilayer,
-			void *userdata);
-
-typedef void (*layer_remove_notification_func)(
-			struct ivi_layout_layer *ivilayer,
-			void *userdata);
-
-typedef void (*surface_create_notification_func)(
-			struct ivi_layout_surface *ivisurf,
-			void *userdata);
-
-typedef void (*surface_remove_notification_func)(
-			struct ivi_layout_surface *ivisurf,
-			void *userdata);
-
-typedef void (*surface_configure_notification_func)(
-			struct ivi_layout_surface *ivisurf,
-			void *userdata);
-
-typedef void (*ivi_controller_surface_content_callback)(
-			struct ivi_layout_surface *ivisurf,
-			int32_t content,
-			void *userdata);
-
 struct ivi_layout_interface {
 
 	/**
@@ -189,37 +156,34 @@ struct ivi_layout_interface {
 	 */
 
 	/**
-	 * \brief register/unregister for notification when ivi_surface is created
+	 * \brief add a listener for notification when ivi_surface is created
+	 *
+	 * When an ivi_surface is created, a signal is emitted
+	 * to the listening controller plugins.
+	 * The pointer of the created ivi_surface is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 */
-	int32_t (*add_notification_create_surface)(
-				surface_create_notification_func callback,
-				void *userdata);
-
-	void (*remove_notification_create_surface)(
-				surface_create_notification_func callback,
-				void *userdata);
+	int32_t (*add_listener_create_surface)(struct wl_listener *listener);
 
 	/**
-	 * \brief register/unregister for notification when ivi_surface is removed
+	 * \brief add a listener for notification when ivi_surface is removed
+	 *
+	 * When an ivi_surface is removed, a signal is emitted
+	 * to the listening controller plugins.
+	 * The pointer of the removed ivi_surface is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 */
-	int32_t (*add_notification_remove_surface)(
-				surface_remove_notification_func callback,
-				void *userdata);
-
-	void (*remove_notification_remove_surface)(
-				surface_remove_notification_func callback,
-				void *userdata);
+	int32_t (*add_listener_remove_surface)(struct wl_listener *listener);
 
 	/**
-	 * \brief register/unregister for notification when ivi_surface is configured
+	 * \brief add a listener for notification when ivi_surface is configured
+	 *
+	 * When an ivi_surface is configured, a signal is emitted
+	 * to the listening controller plugins.
+	 * The pointer of the configured ivi_surface is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 */
-	int32_t (*add_notification_configure_surface)(
-				surface_configure_notification_func callback,
-				void *userdata);
-
-	void (*remove_notification_configure_surface)(
-				surface_configure_notification_func callback,
-				void *userdata);
+	int32_t (*add_listener_configure_surface)(struct wl_listener *listener);
 
 	/**
 	 * \brief Get all ivi_surfaces which are currently registered and managed
@@ -280,16 +244,6 @@ struct ivi_layout_interface {
 					  bool newVisibility);
 
 	/**
-	 * \brief Get the visibility of a surface.
-	 *
-	 * If a surface is not visible it will not be rendered.
-	 *
-	 * \return true if surface is visible
-	 * \return false if surface is invisible or the method call was failed
-	 */
-	bool (*surface_get_visibility)(struct ivi_layout_surface *ivisurf);
-
-	/**
 	 * \brief Set the opacity of a surface.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
@@ -297,14 +251,6 @@ struct ivi_layout_interface {
 	 */
 	int32_t (*surface_set_opacity)(struct ivi_layout_surface *ivisurf,
 				       wl_fixed_t opacity);
-
-	/**
-	 * \brief Get the opacity of a ivi_surface.
-	 *
-	 * \return opacity if the method call was successful
-	 * \return wl_fixed_from_double(0.0) if the method call was failed
-	 */
-	wl_fixed_t (*surface_get_opacity)(struct ivi_layout_surface *ivisurf);
 
 	/**
 	 * \brief Set the area of a ivi_surface which should be used for the rendering.
@@ -330,42 +276,6 @@ struct ivi_layout_interface {
 						     int32_t width, int32_t height);
 
 	/**
-	 * \brief Sets the horizontal and vertical position of the surface.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*surface_set_position)(struct ivi_layout_surface *ivisurf,
-					int32_t dest_x, int32_t dest_y);
-
-	/**
-	 * \brief Get the horizontal and vertical position of the surface.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*surface_get_position)(struct ivi_layout_surface *ivisurf,
-					int32_t *dest_x, int32_t *dest_y);
-
-	/**
-	 * \brief Set the horizontal and vertical dimension of the surface.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*surface_set_dimension)(struct ivi_layout_surface *ivisurf,
-					 int32_t dest_width, int32_t dest_height);
-
-	/**
-	 * \brief Get the horizontal and vertical dimension of the surface.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*surface_get_dimension)(struct ivi_layout_surface *ivisurf,
-					 int32_t *dest_width, int32_t *dest_height);
-
-	/**
 	 * \brief Sets the orientation of a ivi_surface.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
@@ -375,40 +285,18 @@ struct ivi_layout_interface {
 					   enum wl_output_transform orientation);
 
 	/**
-	 * \brief Gets the orientation of a surface.
+	 * \brief add a listener to listen property changes of ivi_surface
 	 *
-	 * \return (enum wl_output_transform)
-	 *              if the method call was successful
-	 * \return WL_OUTPUT_TRANSFORM_NORMAL if the method call was failed
-	 */
-	enum wl_output_transform
-		(*surface_get_orientation)(struct ivi_layout_surface *ivisurf);
-
-	/**
-	 * \brief Set an observer callback for ivi_surface content status change.
+	 * When a property of the ivi_surface is changed, the property_changed
+	 * signal is emitted to the listening controller plugins.
+	 * The pointer of the ivi_surface is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
 	 */
-	int32_t (*surface_set_content_observer)(
-				struct ivi_layout_surface *ivisurf,
-				ivi_controller_surface_content_callback callback,
-				void* userdata);
-
-	/**
-	 * \brief register for notification on property changes of ivi_surface
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*surface_add_notification)(struct ivi_layout_surface *ivisurf,
-					    surface_property_notification_func callback,
-					    void *userdata);
-
-	/**
-	 * \brief remove notification on property changes of ivi_surface
-	 */
-	void (*surface_remove_notification)(struct ivi_layout_surface *ivisurf);
+	int32_t (*surface_add_listener)(struct ivi_layout_surface *ivisurf,
+					    struct wl_listener *listener);
 
 	/**
 	 * \brief get weston_surface of ivi_surface
@@ -435,26 +323,24 @@ struct ivi_layout_interface {
 	 */
 
 	/**
-	 * \brief register/unregister for notification when ivi_layer is created
+	 * \brief add a listener for notification when ivi_layer is created
+	 *
+	 * When an ivi_layer is created, a signal is emitted
+	 * to the listening controller plugins.
+	 * The pointer of the created ivi_layer is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 */
-	int32_t (*add_notification_create_layer)(
-				layer_create_notification_func callback,
-				void *userdata);
-
-	void (*remove_notification_create_layer)(
-				layer_create_notification_func callback,
-				void *userdata);
+	int32_t (*add_listener_create_layer)(struct wl_listener *listener);
 
 	/**
-	 * \brief register/unregister for notification when ivi_layer is removed
+	 * \brief add a listener for notification when ivi_layer is removed
+	 *
+	 * When an ivi_layer is removed, a signal is emitted
+	 * to the listening controller plugins.
+	 * The pointer of the removed ivi_layer is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 */
-	int32_t (*add_notification_remove_layer)(
-				layer_remove_notification_func callback,
-				void *userdata);
-
-	void (*remove_notification_remove_layer)(
-				layer_remove_notification_func callback,
-				void *userdata);
+	int32_t (*add_listener_remove_layer)(struct wl_listener *listener);
 
 	/**
 	 * \brief Create a ivi_layer which should be managed by the service
@@ -509,7 +395,10 @@ struct ivi_layout_interface {
 		(*get_properties_of_layer)(struct ivi_layout_layer *ivilayer);
 
 	/**
-	 * \brief Get all ivi_ayers under the given ivi_surface
+	 * \brief Get all ivi-layers under the given ivi-surface
+	 *
+	 * This means all the ivi-layers the ivi-surface was added to. It has
+	 * no relation to geometric overlaps.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
@@ -519,12 +408,12 @@ struct ivi_layout_interface {
 					    struct ivi_layout_layer ***ppArray);
 
 	/**
-	 * \brief Get all Layers of the given screen
+	 * \brief Get all Layers of the given weston_output
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
 	 */
-	int32_t (*get_layers_on_screen)(struct ivi_layout_screen *iviscrn,
+	int32_t (*get_layers_on_screen)(struct weston_output *output,
 					int32_t *pLength,
 					struct ivi_layout_layer ***ppArray);
 
@@ -539,15 +428,6 @@ struct ivi_layout_interface {
 					bool newVisibility);
 
 	/**
-	 * \brief Get the visibility of a layer. If a layer is not visible,
-	 * the layer and its surfaces will not be rendered.
-	 *
-	 * \return true if layer is visible
-	 * \return false if layer is invisible or the method call was failed
-	 */
-	bool (*layer_get_visibility)(struct ivi_layout_layer *ivilayer);
-
-	/**
 	 * \brief Set the opacity of a ivi_layer.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
@@ -555,14 +435,6 @@ struct ivi_layout_interface {
 	 */
 	int32_t (*layer_set_opacity)(struct ivi_layout_layer *ivilayer,
 				     wl_fixed_t opacity);
-
-	/**
-	 * \brief Get the opacity of a ivi_layer.
-	 *
-	 * \return opacity if the method call was successful
-	 * \return wl_fixed_from_double(0.0) if the method call was failed
-	 */
-	wl_fixed_t (*layer_get_opacity)(struct ivi_layout_layer *ivilayer);
 
 	/**
 	 * \brief Set the area of a ivi_layer which should be used for the rendering.
@@ -590,42 +462,6 @@ struct ivi_layout_interface {
 						   int32_t width, int32_t height);
 
 	/**
-	 * \brief Sets the horizontal and vertical position of the ivi_layer.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*layer_set_position)(struct ivi_layout_layer *ivilayer,
-				      int32_t dest_x, int32_t dest_y);
-
-	/**
-	 * \brief Get the horizontal and vertical position of the ivi_layer.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*layer_get_position)(struct ivi_layout_layer *ivilayer,
-				      int32_t *dest_x, int32_t *dest_y);
-
-	/**
-	 * \brief Set the horizontal and vertical dimension of the layer.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*layer_set_dimension)(struct ivi_layout_layer *ivilayer,
-				       int32_t dest_width, int32_t dest_height);
-
-	/**
-	 * \brief Get the horizontal and vertical dimension of the layer.
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*layer_get_dimension)(struct ivi_layout_layer *ivilayer,
-				       int32_t *dest_width, int32_t *dest_height);
-
-	/**
 	 * \brief Sets the orientation of a ivi_layer.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
@@ -633,16 +469,6 @@ struct ivi_layout_interface {
 	 */
 	int32_t (*layer_set_orientation)(struct ivi_layout_layer *ivilayer,
 					 enum wl_output_transform orientation);
-
-	/**
-	 * \brief Gets the orientation of a layer.
-	 *
-	 * \return (enum wl_output_transform)
-	 *              if the method call was successful
-	 * \return WL_OUTPUT_TRANSFORM_NORMAL if the method call was failed
-	 */
-	enum wl_output_transform
-		(*layer_get_orientation)(struct ivi_layout_layer *ivilayer);
 
 	/**
 	 * \brief Add a ivi_surface to a ivi_layer which is currently managed by the service
@@ -670,19 +496,18 @@ struct ivi_layout_interface {
 					  int32_t number);
 
 	/**
-	 * \brief register for notification on property changes of ivi_layer
+	 * \brief add a listener to listen property changes of ivi_layer
+	 *
+	 *	When a property of the ivi_layer is changed, the property_changed
+	 * signal is emitted to the listening controller plugins.
+	 * The pointer of the ivi_layer is sent as the void *data argument
+	 * to the wl_listener::notify callback function of the listener.
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
 	 */
-	int32_t (*layer_add_notification)(struct ivi_layout_layer *ivilayer,
-					  layer_property_notification_func callback,
-					  void *userdata);
-
-	/**
-	 * \brief remove notification on property changes of ivi_layer
-	 */
-	void (*layer_remove_notification)(struct ivi_layout_layer *ivilayer);
+	int32_t (*layer_add_listener)(struct ivi_layout_layer *ivilayer,
+					  struct wl_listener *listener);
 
 	/**
 	 * \brief set type of transition animation
@@ -696,72 +521,34 @@ struct ivi_layout_interface {
 	 */
 
 	/**
-	 * \brief get ivi_layout_screen from id of ivi_screen
-	 *
-	 * \return (struct ivi_layout_screen *)
-	 *              if the method call was successful
-	 * \return NULL if the method call was failed
-	 */
-	struct ivi_layout_screen *
-		(*get_screen_from_id)(uint32_t id_screen);
-
-	/**
-	 * \brief Get the screen resolution of a specific ivi_screen
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*get_screen_resolution)(struct ivi_layout_screen *iviscrn,
-					 int32_t *pWidth,
-					 int32_t *pHeight);
-
-	/**
-	 * \brief Get the ivi_screens
-	 *
-	 * \return IVI_SUCCEEDED if the method call was successful
-	 * \return IVI_FAILED if the method call was failed
-	 */
-	int32_t (*get_screens)(int32_t *pLength, struct ivi_layout_screen ***ppArray);
-
-	/**
-	 * \brief Get the ivi_screens under the given ivi_layer
+	 * \brief Get the weston_outputs under the given ivi_layer
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
 	 */
 	int32_t (*get_screens_under_layer)(struct ivi_layout_layer *ivilayer,
 					   int32_t *pLength,
-					   struct ivi_layout_screen ***ppArray);
+					   struct weston_output ***ppArray);
 
 	/**
-	 * \brief Add a ivi_layer to a ivi_screen which is currently managed
+	 * \brief Add a ivi_layer to a weston_output which is currently managed
 	 * by the service
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
 	 */
-	int32_t (*screen_add_layer)(struct ivi_layout_screen *iviscrn,
+	int32_t (*screen_add_layer)(struct weston_output *output,
 				    struct ivi_layout_layer *addlayer);
 
 	/**
-	 * \brief Sets render order of ivi_layers on a ivi_screen
+	 * \brief Sets render order of ivi_layers on a weston_output
 	 *
 	 * \return IVI_SUCCEEDED if the method call was successful
 	 * \return IVI_FAILED if the method call was failed
 	 */
-	int32_t (*screen_set_render_order)(struct ivi_layout_screen *iviscrn,
+	int32_t (*screen_set_render_order)(struct weston_output *output,
 					   struct ivi_layout_layer **pLayer,
 					   const int32_t number);
-
-	/**
-	 * \brief get weston_output from ivi_layout_screen.
-	 *
-	 * \return (struct weston_output *)
-	 *              if the method call was successful
-	 * \return NULL if the method call was failed
-	 */
-	struct weston_output *(*screen_get_output)(struct ivi_layout_screen *);
-
 
 	/**
 	 * transision animation for layer
@@ -784,26 +571,13 @@ struct ivi_layout_interface {
 				int32_t width, int32_t height);
 
 	/**
-	 * remove notification by callback on property changes of ivi_surface
-	 */
-	void (*surface_remove_notification_by_callback)(struct ivi_layout_surface *ivisurf,
-							surface_property_notification_func callback,
-							void *userdata);
-
-	/**
-	 * \brief remove notification by callback on property changes of ivi_layer
-	 */
-	void (*layer_remove_notification_by_callback)(struct ivi_layout_layer *ivilayer,
-						      layer_property_notification_func callback,
-						      void *userdata);
-
-	/**
-	 * \brief get id of ivi_screen from ivi_layout_screen
+	 * Returns the ivi_layout_surface or NULL
 	 *
-	 *
-	 * \return id of ivi_screen
+	 * NULL is returned if there is no ivi_layout_surface corresponding
+	 * to the given weston_surface.
 	 */
-	uint32_t (*get_id_of_screen)(struct ivi_layout_screen *iviscrn);
+	struct ivi_layout_surface *
+		(*get_surface)(struct weston_surface *surface);
 };
 
 #ifdef __cplusplus

@@ -116,7 +116,17 @@ static struct zuc_fixture config_test_t1 = {
 	"[bar]\n"
 	"# more comments\n"
 	"number=5252\n"
+	"zero=0\n"
+	"negative=-42\n"
 	"flag=false\n"
+	"\n"
+	"[colors]\n"
+	"none=0x00000000\n"
+	"low=0x11223344\n"
+	"high=0xff00ff00\n"
+	"oct=01234567\n"
+	"dec=12345670\n"
+	"short=1234567\n"
 	"\n"
 	"[stuff]\n"
 	"flag=     true \n"
@@ -135,7 +145,7 @@ static struct zuc_fixture config_test_t1 = {
 };
 
 static const char *section_names[] = {
-	"foo", "bar", "stuff", "bucket", "bucket"
+	"foo", "bar", "colors", "stuff", "bucket", "bucket"
 };
 
 /*
@@ -263,6 +273,7 @@ ZUC_TEST_F(config_test_t1, test006, data)
 
 	ZUC_ASSERT_EQ(0, r);
 	ZUC_ASSERT_EQ(5252, n);
+	ZUC_ASSERT_EQ(0, errno);
 }
 
 ZUC_TEST_F(config_test_t1, test007, data)
@@ -289,8 +300,10 @@ ZUC_TEST_F(config_test_t1, test008, data)
 
 	section = weston_config_get_section(config, "bar", NULL, NULL);
 	r = weston_config_section_get_uint(section, "number", &u, 600);
+
 	ZUC_ASSERT_EQ(0, r);
 	ZUC_ASSERT_EQ(5252, u);
+	ZUC_ASSERT_EQ(0, errno);
 }
 
 ZUC_TEST_F(config_test_t1, test009, data)
@@ -424,7 +437,176 @@ ZUC_TEST_F(config_test_t1, test017, data)
 	while (weston_config_next_section(config, &section, &name))
 		ZUC_ASSERT_STREQ(section_names[i++], name);
 
-	ZUC_ASSERT_EQ(5, i);
+	ZUC_ASSERT_EQ(6, i);
+}
+
+ZUC_TEST_F(config_test_t1, test018, data)
+{
+	int r;
+	int32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "bar", NULL, NULL);
+	r = weston_config_section_get_int(section, "zero", &n, 600);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test019, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "bar", NULL, NULL);
+	r = weston_config_section_get_uint(section, "zero", &n, 600);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test020, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "colors", NULL, NULL);
+	r = weston_config_section_get_color(section, "none", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0x000000, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test021, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "colors", NULL, NULL);
+	r = weston_config_section_get_color(section, "low", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0x11223344, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test022, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "colors", NULL, NULL);
+	r = weston_config_section_get_color(section, "high", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0xff00ff00, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test023, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	// Treat colors as hex values even if missing the leading 0x
+	section = weston_config_get_section(config, "colors", NULL, NULL);
+	r = weston_config_section_get_color(section, "oct", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0x01234567, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test024, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	// Treat colors as hex values even if missing the leading 0x
+	section = weston_config_get_section(config, "colors", NULL, NULL);
+	r = weston_config_section_get_color(section, "dec", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(0x12345670, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test025, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	// 7-digit colors are not valid (most likely typos)
+	section = weston_config_get_section(config, "colors", NULL, NULL);
+	r = weston_config_section_get_color(section, "short", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(-1, r);
+	ZUC_ASSERT_EQ(0xff336699, n);
+	ZUC_ASSERT_EQ(EINVAL, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test026, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	// String color names are unsupported
+	section = weston_config_get_section(config, "bucket", NULL, NULL);
+	r = weston_config_section_get_color(section, "color", &n, 0xff336699);
+
+	ZUC_ASSERT_EQ(-1, r);
+	ZUC_ASSERT_EQ(0xff336699, n);
+	ZUC_ASSERT_EQ(EINVAL, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test027, data)
+{
+	int r;
+	int32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "bar", NULL, NULL);
+	r = weston_config_section_get_int(section, "negative", &n, 600);
+
+	ZUC_ASSERT_EQ(0, r);
+	ZUC_ASSERT_EQ(-42, n);
+	ZUC_ASSERT_EQ(0, errno);
+}
+
+ZUC_TEST_F(config_test_t1, test028, data)
+{
+	int r;
+	uint32_t n;
+	struct weston_config_section *section;
+	struct weston_config *config = data;
+
+	section = weston_config_get_section(config, "bar", NULL, NULL);
+	r = weston_config_section_get_uint(section, "negative", &n, 600);
+
+	ZUC_ASSERT_EQ(-1, r);
+	ZUC_ASSERT_EQ(600, n);
+	ZUC_ASSERT_EQ(ERANGE, errno);
 }
 
 ZUC_TEST_F(config_test_t2, doesnt_parse, data)

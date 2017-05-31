@@ -25,10 +25,12 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "shared/helpers.h"
+#include "shared/xalloc.h"
 #include "weston-test-client-helper.h"
 #include "ivi-application-client-protocol.h"
 #include "ivi-test.h"
@@ -198,14 +200,13 @@ const char * const basic_test_names[] = {
 	"surface_bad_opacity",
 	"surface_properties_changed_notification",
 	"surface_bad_properties_changed_notification",
+	"surface_on_many_layer",
 };
 
 const char * const surface_property_commit_changes_test_names[] = {
 	"commit_changes_after_visibility_set_surface_destroy",
 	"commit_changes_after_opacity_set_surface_destroy",
 	"commit_changes_after_orientation_set_surface_destroy",
-	"commit_changes_after_dimension_set_surface_destroy",
-	"commit_changes_after_position_set_surface_destroy",
 	"commit_changes_after_source_rectangle_set_surface_destroy",
 	"commit_changes_after_destination_rectangle_set_surface_destroy",
 };
@@ -213,6 +214,7 @@ const char * const surface_property_commit_changes_test_names[] = {
 const char * const render_order_test_names[] = {
 	"layer_render_order",
 	"layer_bad_render_order",
+	"layer_add_surfaces",
 };
 
 TEST_P(ivi_layout_runner, basic_test_names)
@@ -395,7 +397,7 @@ TEST(ivi_layout_surface_configure_notification)
 	struct client *client;
 	struct runner *runner;
 	struct ivi_window *wind;
-	struct wl_buffer *buffer;
+	struct buffer *buffer;
 
 	client = create_client();
 	runner = client_create_runner(client);
@@ -404,21 +406,21 @@ TEST(ivi_layout_surface_configure_notification)
 
 	wind = client_create_ivi_window(client, IVI_TEST_SURFACE_ID(0));
 
-	buffer = create_shm_buffer(client, 200, 300, NULL);
+	buffer = create_shm_buffer_a8r8g8b8(client, 200, 300);
 
-	wl_surface_attach(wind->wl_surface, buffer, 0, 0);
+	wl_surface_attach(wind->wl_surface, buffer->proxy, 0, 0);
 	wl_surface_damage(wind->wl_surface, 0, 0, 20, 30);
 	wl_surface_commit(wind->wl_surface);
 
 	runner_run(runner, "surface_configure_notification_p2");
 
-	wl_surface_attach(wind->wl_surface, buffer, 0, 0);
+	wl_surface_attach(wind->wl_surface, buffer->proxy, 0, 0);
 	wl_surface_damage(wind->wl_surface, 0, 0, 40, 50);
 	wl_surface_commit(wind->wl_surface);
 
 	runner_run(runner, "surface_configure_notification_p3");
 
-	wl_buffer_destroy(buffer);
+	buffer_destroy(buffer);
 	ivi_window_destroy(wind);
 	runner_destroy(runner);
 }

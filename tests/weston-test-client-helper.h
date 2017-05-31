@@ -30,6 +30,8 @@
 
 #include <assert.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <pixman.h>
 
 #include <wayland-client-protocol.h>
 #include "weston-test-runner.h"
@@ -127,15 +129,20 @@ struct output {
 	int initialized;
 };
 
+struct buffer {
+	struct wl_buffer *proxy;
+	size_t len;
+	pixman_image_t *image;
+};
+
 struct surface {
 	struct wl_surface *wl_surface;
-	struct wl_buffer *wl_buffer;
 	struct output *output;
 	int x;
 	int y;
 	int width;
 	int height;
-	void *data;
+	struct buffer *buffer;
 };
 
 struct rectangle {
@@ -145,29 +152,17 @@ struct rectangle {
 	int height;
 };
 
-void *
-fail_on_null(void *p);
-
-static inline void *
-xzalloc(size_t s)
-{
-	return fail_on_null(calloc(1, s));
-}
-
-static inline void *
-xmalloc(size_t s)
-{
-	return fail_on_null(malloc(s));
-}
-
 struct client *
 create_client(void);
 
 struct client *
 create_client_and_test_surface(int x, int y, int width, int height);
 
-struct wl_buffer *
-create_shm_buffer(struct client *client, int width, int height, void **pixels);
+struct buffer *
+create_shm_buffer_a8r8g8b8(struct client *client, int width, int height);
+
+void
+buffer_destroy(struct buffer *buf);
 
 int
 surface_contains(struct surface *surface, int x, int y);
@@ -187,9 +182,6 @@ frame_callback_wait_nofail(struct client *client, int *done);
 
 #define frame_callback_wait(c, d) assert(frame_callback_wait_nofail((c), (d)))
 
-int
-get_n_egl_buffers(struct client *client);
-
 void
 skip(const char *fmt, ...);
 
@@ -204,24 +196,20 @@ char *
 screenshot_reference_filename(const char *basename, uint32_t seq);
 
 bool
-check_surfaces_geometry(const struct surface *a, const struct surface *b);
+check_images_match(pixman_image_t *img_a, pixman_image_t *img_b,
+		   const struct rectangle *clip);
+
+pixman_image_t *
+visualize_image_difference(pixman_image_t *img_a, pixman_image_t *img_b,
+			   const struct rectangle *clip_rect);
 
 bool
-check_surfaces_equal(const struct surface *a, const struct surface *b);
+write_image_as_png(pixman_image_t *image, const char *fname);
 
-bool
-check_surfaces_match_in_clip(const struct surface *a, const struct surface *b, const struct rectangle *clip);
+pixman_image_t *
+load_image_from_png(const char *fname);
 
-bool
-write_surface_as_png(const struct surface *weston_surface, const char *fname);
-
-struct surface *
-load_surface_from_png(const char *fname);
-
-struct surface *
-create_screenshot_surface(struct client *client);
-
-struct surface *
+struct buffer *
 capture_screenshot_of_output(struct client *client);
 
 #endif

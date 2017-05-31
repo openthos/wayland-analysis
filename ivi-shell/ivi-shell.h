@@ -23,7 +23,11 @@
  * SOFTWARE.
  */
 
+#ifndef WESTON_IVI_SHELL_H
+#define WESTON_IVI_SHELL_H
+
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "compositor.h"
 
@@ -65,3 +69,14 @@ input_panel_setup(struct ivi_shell *shell);
 
 void
 input_panel_destroy(struct ivi_shell *shell);
+
+void
+shell_surface_send_configure(struct weston_surface *surface,
+			     int32_t width, int32_t height);
+
+struct ivi_layout_surface;
+
+struct ivi_layout_surface *
+shell_get_ivi_layout_surface(struct weston_surface *surface);
+
+#endif /* WESTON_IVI_SHELL_H */

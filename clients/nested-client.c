@@ -23,6 +23,7 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -332,6 +333,8 @@ nested_client_destroy(struct nested_client *client)
 		       EGL_NO_SURFACE, EGL_NO_SURFACE,
 		       EGL_NO_CONTEXT);
 
+	weston_platform_destroy_egl_surface(client->egl_display,
+					    client->egl_surface);
 	wl_egl_window_destroy(client->native);
 
 	wl_surface_destroy(client->surface);
@@ -342,6 +345,8 @@ nested_client_destroy(struct nested_client *client)
 	wl_registry_destroy(client->registry);
 	wl_display_flush(client->display);
 	wl_display_disconnect(client->display);
+	eglTerminate(client->egl_display);
+	eglReleaseThread();
 }
 
 int

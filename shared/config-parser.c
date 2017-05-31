@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <string.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -40,6 +41,7 @@
 #include <wayland-util.h>
 #include "config-parser.h"
 #include "helpers.h"
+#include "string-helpers.h"
 
 struct weston_config_entry {
 	char *key;
@@ -160,7 +162,6 @@ weston_config_section_get_int(struct weston_config_section *section,
 			      int32_t *value, int32_t default_value)
 {
 	struct weston_config_entry *entry;
-	char *end;
 
 	entry = config_section_get_entry(section, key);
 	if (entry == NULL) {
@@ -169,10 +170,8 @@ weston_config_section_get_int(struct weston_config_section *section,
 		return -1;
 	}
 
-	*value = strtol(entry->value, &end, 0);
-	if (*end != '\0') {
+	if (!safe_strtoint(entry->value, value)) {
 		*value = default_value;
-		errno = EINVAL;
 		return -1;
 	}
 
@@ -185,6 +184,7 @@ weston_config_section_get_uint(struct weston_config_section *section,
 			       const char *key,
 			       uint32_t *value, uint32_t default_value)
 {
+	long int ret;
 	struct weston_config_entry *entry;
 	char *end;
 
@@ -195,9 +195,57 @@ weston_config_section_get_uint(struct weston_config_section *section,
 		return -1;
 	}
 
-	*value = strtoul(entry->value, &end, 0);
-	if (*end != '\0') {
+	errno = 0;
+	ret = strtol(entry->value, &end, 0);
+	if (errno != 0 || end == entry->value || *end != '\0') {
 		*value = default_value;
+		errno = EINVAL;
+		return -1;
+	}
+
+	/* check range */
+	if (ret < 0 || ret > INT_MAX) {
+		*value = default_value;
+		errno = ERANGE;
+		return -1;
+	}
+
+	*value = ret;
+
+	return 0;
+}
+
+WL_EXPORT
+int
+weston_config_section_get_color(struct weston_config_section *section,
+				const char *key,
+				uint32_t *color, uint32_t default_color)
+{
+	struct weston_config_entry *entry;
+	int len;
+	char *end;
+
+	entry = config_section_get_entry(section, key);
+	if (entry == NULL) {
+		*color = default_color;
+		errno = ENOENT;
+		return -1;
+	}
+
+	len = strlen(entry->value);
+	if (len == 1 && entry->value[0] == '0') {
+		*color = 0;
+		return 0;
+	} else if (len != 8 && len != 10) {
+		*color = default_color;
+		errno = EINVAL;
+		return -1;
+	}
+
+	errno = 0;
+	*color = strtoul(entry->value, &end, 16);
+	if (errno != 0 || end == entry->value || *end != '\0') {
+		*color = default_color;
 		errno = EINVAL;
 		return -1;
 	}
@@ -312,7 +360,15 @@ config_add_section(struct weston_config *config, const char *name)
 	struct weston_config_section *section;
 
 	section = malloc(sizeof *section);
+	if (section == NULL)
+		return NULL;
+
 	section->name = strdup(name);
+	if (section->name == NULL) {
+		free(section);
+		return NULL;
+	}
+
 	wl_list_init(&section->entry_list);
 	wl_list_insert(config->section_list.prev, &section->link);
 
@@ -326,8 +382,22 @@ section_add_entry(struct weston_config_section *section,
 	struct weston_config_entry *entry;
 
 	entry = malloc(sizeof *entry);
+	if (entry == NULL)
+		return NULL;
+
 	entry->key = strdup(key);
+	if (entry->key == NULL) {
+		free(entry);
+		return NULL;
+	}
+
 	entry->value = strdup(value);
+	if (entry->value == NULL) {
+		free(entry->key);
+		free(entry);
+		return NULL;
+	}
+
 	wl_list_insert(section->entry_list.prev, &entry->link);
 
 	return entry;
@@ -420,6 +490,7 @@ weston_config_get_full_path(struct weston_config *config)
 	return config == NULL ? NULL : config->path;
 }
 
+WL_EXPORT
 int
 weston_config_next_section(struct weston_config *config,
 			   struct weston_config_section **section,

@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -85,6 +86,8 @@ show_input_panel_surface(struct input_panel_surface *ipsurf)
 	                          &ipsurf->view->layer_link);
 	weston_view_geometry_dirty(ipsurf->view);
 	weston_view_update_transform(ipsurf->view);
+	ipsurf->surface->is_mapped = true;
+	ipsurf->view->is_mapped = true;
 	weston_surface_damage(ipsurf->surface);
 
 	if (ipsurf->anim)
@@ -112,8 +115,8 @@ show_input_panels(struct wl_listener *listener, void *data)
 	shell->showing_input_panels = true;
 
 	if (!shell->locked)
-		wl_list_insert(&shell->compositor->cursor_layer.link,
-			       &shell->input_panel_layer.link);
+		weston_layer_set_position(&shell->input_panel_layer,
+					  WESTON_LAYER_POSITION_TOP_UI);
 
 	wl_list_for_each_safe(ipsurf, next,
 			      &shell->input_panel.surfaces, link) {
@@ -138,7 +141,7 @@ hide_input_panels(struct wl_listener *listener, void *data)
 	shell->showing_input_panels = false;
 
 	if (!shell->locked)
-		wl_list_remove(&shell->input_panel_layer.link);
+		weston_layer_unset_position(&shell->input_panel_layer);
 
 	wl_list_for_each_safe(view, next,
 			      &shell->input_panel_layer.view_list.link,
@@ -163,9 +166,9 @@ input_panel_get_label(struct weston_surface *surface, char *buf, size_t len)
 }
 
 static void
-input_panel_configure(struct weston_surface *surface, int32_t sx, int32_t sy)
+input_panel_committed(struct weston_surface *surface, int32_t sx, int32_t sy)
 {
-	struct input_panel_surface *ip_surface = surface->configure_private;
+	struct input_panel_surface *ip_surface = surface->committed_private;
 	struct desktop_shell *shell = ip_surface->shell;
 	struct weston_view *view;
 	float x, y;
@@ -198,7 +201,7 @@ destroy_input_panel_surface(struct input_panel_surface *input_panel_surface)
 	wl_list_remove(&input_panel_surface->surface_destroy_listener.link);
 	wl_list_remove(&input_panel_surface->link);
 
-	input_panel_surface->surface->configure = NULL;
+	input_panel_surface->surface->committed = NULL;
 	weston_surface_set_label_func(input_panel_surface->surface, NULL);
 	weston_view_destroy(input_panel_surface->view);
 
@@ -208,8 +211,8 @@ destroy_input_panel_surface(struct input_panel_surface *input_panel_surface)
 static struct input_panel_surface *
 get_input_panel_surface(struct weston_surface *surface)
 {
-	if (surface->configure == input_panel_configure) {
-		return surface->configure_private;
+	if (surface->committed == input_panel_committed) {
+		return surface->committed_private;
 	} else {
 		return NULL;
 	}
@@ -239,8 +242,8 @@ create_input_panel_surface(struct desktop_shell *shell,
 	if (!input_panel_surface)
 		return NULL;
 
-	surface->configure = input_panel_configure;
-	surface->configure_private = input_panel_surface;
+	surface->committed = input_panel_committed;
+	surface->committed_private = input_panel_surface;
 	weston_surface_set_label_func(surface, input_panel_get_label);
 
 	input_panel_surface->shell = shell;
@@ -325,7 +328,7 @@ input_panel_get_input_panel_surface(struct wl_client *client,
 	if (!ipsurf) {
 		wl_resource_post_error(surface_resource,
 				       WL_DISPLAY_ERROR_INVALID_OBJECT,
-				       "surface->configure already set");
+				       "surface->committed already set");
 		return;
 	}
 

@@ -144,7 +144,7 @@ create_tmpfile_cloexec(char *tmpname)
  *
  * If the C library implements posix_fallocate(), it is used to
  * guarantee that disk space is available for the file at the
- * given size. If disk space is insufficent, errno is set to ENOSPC.
+ * given size. If disk space is insufficient, errno is set to ENOSPC.
  * If posix_fallocate() is not supported, program may receive
  * SIGBUS on accessing mmap()'ed file contents instead.
  */
@@ -178,14 +178,18 @@ os_create_anonymous_file(off_t size)
 		return -1;
 
 #ifdef HAVE_POSIX_FALLOCATE
-	ret = posix_fallocate(fd, 0, size);
+	do {
+		ret = posix_fallocate(fd, 0, size);
+	} while (ret == EINTR);
 	if (ret != 0) {
 		close(fd);
 		errno = ret;
 		return -1;
 	}
 #else
-	ret = ftruncate(fd, size);
+	do {
+		ret = ftruncate(fd, size);
+	} while (ret < 0 && errno == EINTR);
 	if (ret < 0) {
 		close(fd);
 		return -1;

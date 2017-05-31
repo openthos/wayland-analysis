@@ -47,17 +47,11 @@
 #include <wayland-server.h>
 
 #include "shared/helpers.h"
+#include "shared/xalloc.h"
 #include "window.h"
 
-#ifndef EGL_WL_create_wayland_buffer_from_image
-#define EGL_WL_create_wayland_buffer_from_image 1
+#include "weston-egl-ext.h"
 
-#ifdef EGL_EGLEXT_PROTOTYPES
-EGLAPI struct wl_buffer * EGLAPIENTRY eglCreateWaylandBufferFromImageWL(EGLDisplay dpy, EGLImageKHR image);
-#endif
-typedef struct wl_buffer * (EGLAPIENTRYP PFNEGLCREATEWAYLANDBUFFERFROMIMAGEWL) (EGLDisplay dpy, EGLImageKHR image);
-
-#endif
 
 static int option_blit;
 
@@ -754,7 +748,7 @@ nested_init_compositor(struct nested *nested)
 
 	nested->egl_display = display_get_egl_display(nested->display);
 	extensions = eglQueryString(nested->egl_display, EGL_EXTENSIONS);
-	if (strstr(extensions, "EGL_WL_bind_wayland_display") == NULL) {
+	if (weston_check_egl_extension(extensions, "EGL_WL_bind_wayland_display") == NULL) {
 		fprintf(stderr, "no EGL_WL_bind_wayland_display extension\n");
 		return -1;
 	}
@@ -777,7 +771,7 @@ nested_init_compositor(struct nested *nested)
 		const char *func = "eglCreateWaylandBufferFromImageWL";
 		const char *ext = "EGL_WL_create_wayland_buffer_from_image";
 
-		if (strstr(extensions, ext)) {
+		if (weston_check_egl_extension(extensions, ext)) {
 			create_wayland_buffer_from_image =
 				(void *) eglGetProcAddress(func);
 			use_ss_renderer = 1;

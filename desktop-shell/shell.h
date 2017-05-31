@@ -24,9 +24,11 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
 #include "compositor.h"
+#include "xwayland/xwayland-api.h"
 
 #include "weston-desktop-shell-server-protocol.h"
 
@@ -114,14 +116,31 @@ struct shell_output {
 	struct exposay_output eoutput;
 	struct wl_listener    destroy_listener;
 	struct wl_list        link;
+
+	struct weston_surface *panel_surface;
+	struct wl_listener panel_surface_listener;
+
+	struct weston_surface *background_surface;
+	struct wl_listener background_surface_listener;
+
+	struct {
+		struct weston_view *view;
+		struct weston_view_animation *animation;
+		enum fade_type type;
+		struct wl_event_source *startup_timer;
+	} fade;
 };
 
+struct weston_desktop;
 struct desktop_shell {
 	struct weston_compositor *compositor;
+	struct weston_desktop *desktop;
+	const struct weston_xwayland_surface_api *xwayland_surface_api;
 
 	struct wl_listener idle_listener;
 	struct wl_listener wake_listener;
 	struct wl_listener transform_listener;
+	struct wl_listener resized_listener;
 	struct wl_listener destroy_listener;
 	struct wl_listener show_input_panel_listener;
 	struct wl_listener hide_input_panel_listener;
@@ -180,13 +199,6 @@ struct desktop_shell {
 		struct wl_list surfaces;
 	} input_panel;
 
-	struct {
-		struct weston_view *view;
-		struct weston_view_animation *animation;
-		enum fade_type type;
-		struct wl_event_source *startup_timer;
-	} fade;
-
 	struct exposay exposay;
 
 	bool allow_zap;
@@ -228,8 +240,8 @@ lower_fullscreen_layer(struct desktop_shell *shell,
 		       struct weston_output *lowering_output);
 
 void
-activate(struct desktop_shell *shell, struct weston_surface *es,
-	 struct weston_seat *seat, bool configure);
+activate(struct desktop_shell *shell, struct weston_view *view,
+	 struct weston_seat *seat, uint32_t flags);
 
 void
 exposay_binding(struct weston_keyboard *keyboard,
