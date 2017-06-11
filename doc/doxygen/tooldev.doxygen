@@ -1,0 +1,12 @@
+PROJECT_NAME           = "Tool Internals"
+OUTPUT_DIRECTORY       = ../../docs/developer
+JAVADOC_AUTOBRIEF      = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTRACT_ALL            = YES
+INPUT                  = \
+		       ../../doc/doxygen/devtools.dox \
+		       ../../tools/zunitc
+RECURSIVE              = YES
+GENERATE_LATEX         = NO
+DOTFILE_DIRS           = ../../doc/doxygen
+STRIP_FROM_PATH        = ../..

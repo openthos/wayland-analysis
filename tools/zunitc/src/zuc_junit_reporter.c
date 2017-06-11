@@ -30,6 +30,7 @@
 #if ENABLE_JUNIT_XML
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <libxml/parser.h>
 #include <memory.h>
 #include <stdio.h>
@@ -52,6 +53,12 @@
 
 #define ISO_8601_FORMAT "%Y-%m-%dT%H:%M:%SZ"
 
+#if LIBXML_VERSION >= 20904
+#define STRPRINTF_CAST
+#else
+#define STRPRINTF_CAST BAD_CAST
+#endif
+
 /**
  * Internal data.
  */
@@ -67,7 +74,7 @@ static void
 set_attribute(xmlNodePtr node, const char *name, int value)
 {
 	xmlChar scratch[MAX_64BIT_STRLEN + 1] = {};
-	xmlStrPrintf(scratch, sizeof(scratch), BAD_CAST "%d", value);
+	xmlStrPrintf(scratch, sizeof(scratch), STRPRINTF_CAST "%d", value);
 	xmlSetProp(node, BAD_CAST name, scratch);
 }
 
@@ -128,12 +135,12 @@ emit_event(xmlNodePtr parent, struct zuc_event *event)
 			}
 		} else {
 			if (asprintf(&msg, "%s:%d: error: Value of: %s\n"
-				     "  Actual: %ld\n"
-				     "Expected: %s\n"
-				     "Which is: %ld\n",
-				     event->file, event->line, event->expr2,
-				     event->val2, event->expr1,
-				     event->val1) < 0) {
+			             "  Actual: %"PRIdPTR"\n"
+			             "Expected: %s\n"
+			             "Which is: %"PRIdPTR"\n",
+			             event->file, event->line, event->expr2,
+			             event->val2, event->expr1,
+			             event->val1) < 0) {
 				msg = NULL;
 			}
 		}
@@ -151,12 +158,12 @@ emit_event(xmlNodePtr parent, struct zuc_event *event)
 			}
 		} else {
 			if (asprintf(&msg, "%s:%d: error: "
-				     "Expected: (%s) %s (%s),"
-				     " actual: %ld vs %ld\n",
-				     event->file, event->line,
-				     event->expr1, zuc_get_opstr(event->op),
-				     event->expr2, event->val1,
-				     event->val2) < 0) {
+			             "Expected: (%s) %s (%s),"
+			             " actual: %"PRIdPTR" vs %"PRIdPTR"\n",
+			             event->file, event->line,
+			             event->expr1, zuc_get_opstr(event->op),
+			             event->expr2, event->val1,
+			             event->val2) < 0) {
 				msg = NULL;
 			}
 		}
@@ -181,10 +188,11 @@ emit_event(xmlNodePtr parent, struct zuc_event *event)
 		break;
 	default:
 		if (asprintf(&msg, "%s:%d: error: "
-			     "Expected: (%s) %s (%s), actual: %ld vs %ld\n",
-			     event->file, event->line,
-			     event->expr1, zuc_get_opstr(event->op),
-			     event->expr2, event->val1, event->val2) < 0) {
+		             "Expected: (%s) %s (%s), actual: %"PRIdPTR" vs "
+		             "%"PRIdPTR"\n",
+		             event->file, event->line,
+		             event->expr1, zuc_get_opstr(event->op),
+		             event->expr2, event->val1, event->val2) < 0) {
 			msg = NULL;
 		}
 	}
@@ -227,7 +235,7 @@ as_duration(long ms)
 	} else {
 		/*
 		 * Special case to match behavior of standard JUnit output
-		 * writers. Asumption is certain readers might have
+		 * writers. Assumption is certain readers might have
 		 * limitations, etc. so it is best to keep 100% identical
 		 * output.
 		 */

@@ -3,27 +3,31 @@
  * Copyright © 2010 Intel Corporation
  * Copyright © 2014 Collabora Ltd.
  *
- * Permission to use, copy, modify, distribute, and sell this software and its
- * documentation for any purpose is hereby granted without fee, provided that
- * the above copyright notice appear in all copies and that both that copyright
- * notice and this permission notice appear in supporting documentation, and
- * that the name of the copyright holders not be used in advertising or
- * publicity pertaining to distribution of the software without specific,
- * written prior permission.  The copyright holders make no representations
- * about the suitability of this software for any purpose.  It is provided "as
- * is" without express or implied warranty.
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
  *
- * THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
- * INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO
- * EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY SPECIAL, INDIRECT OR
- * CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
- * DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
- * TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
- * OF THIS SOFTWARE.
+ * The above copyright notice and this permission notice (including the
+ * next paragraph) shall be included in all copies or substantial
+ * portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT.  IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
  */
 
-#include <config.h>
+#include "config.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +44,8 @@
 #include <drm_fourcc.h>
 
 #include <wayland-client.h>
-#include "xdg-shell-unstable-v5-client-protocol.h"
+#include "shared/zalloc.h"
+#include "xdg-shell-unstable-v6-client-protocol.h"
 #include "fullscreen-shell-unstable-v1-client-protocol.h"
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
 
@@ -48,7 +53,7 @@ struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
-	struct xdg_shell *shell;
+	struct zxdg_shell_v6 *shell;
 	struct zwp_fullscreen_shell_v1 *fshell;
 	struct zwp_linux_dmabuf_v1 *dmabuf;
 	int xrgb8888_format_found;
@@ -73,17 +78,25 @@ struct buffer {
 	unsigned long stride;
 };
 
+#define NUM_BUFFERS 3
+
 struct window {
 	struct display *display;
 	int width, height;
 	struct wl_surface *surface;
-	struct xdg_surface *xdg_surface;
-	struct buffer buffers[2];
+	struct zxdg_surface_v6 *xdg_surface;
+	struct zxdg_toplevel_v6 *xdg_toplevel;
+	struct buffer buffers[NUM_BUFFERS];
 	struct buffer *prev_buffer;
 	struct wl_callback *callback;
+	bool initialized;
+	bool wait_for_configure;
 };
 
 static int running = 1;
+
+static void
+redraw(void *data, struct wl_callback *callback, uint32_t time);
 
 static void
 buffer_release(void *data, struct wl_buffer *buffer)
@@ -286,21 +299,38 @@ error:
 }
 
 static void
-handle_configure(void *data, struct xdg_surface *surface,
-		 int32_t width, int32_t height,
-		 struct wl_array *states, uint32_t serial)
+xdg_surface_handle_configure(void *data, struct zxdg_surface_v6 *surface,
+			     uint32_t serial)
+{
+	struct window *window = data;
+
+	zxdg_surface_v6_ack_configure(surface, serial);
+
+	if (window->initialized && window->wait_for_configure)
+		redraw(window, NULL, 0);
+	window->wait_for_configure = false;
+}
+
+static const struct zxdg_surface_v6_listener xdg_surface_listener = {
+	xdg_surface_handle_configure,
+};
+
+static void
+xdg_toplevel_handle_configure(void *data, struct zxdg_toplevel_v6 *toplevel,
+			      int32_t width, int32_t height,
+			      struct wl_array *states)
 {
 }
 
 static void
-handle_delete(void *data, struct xdg_surface *xdg_surface)
+xdg_toplevel_handle_close(void *data, struct zxdg_toplevel_v6 *xdg_toplevel)
 {
 	running = 0;
 }
 
-static const struct xdg_surface_listener xdg_surface_listener = {
-	handle_configure,
-	handle_delete,
+static const struct zxdg_toplevel_v6_listener xdg_toplevel_listener = {
+	xdg_toplevel_handle_configure,
+	xdg_toplevel_handle_close,
 };
 
 static struct window *
@@ -310,7 +340,7 @@ create_window(struct display *display, int width, int height)
 	int i;
 	int ret;
 
-	window = calloc(1, sizeof *window);
+	window = zalloc(sizeof *window);
 	if (!window)
 		return NULL;
 
@@ -322,15 +352,26 @@ create_window(struct display *display, int width, int height)
 
 	if (display->shell) {
 		window->xdg_surface =
-			xdg_shell_get_xdg_surface(display->shell,
-						  window->surface);
+			zxdg_shell_v6_get_xdg_surface(display->shell,
+						      window->surface);
 
 		assert(window->xdg_surface);
 
-		xdg_surface_add_listener(window->xdg_surface,
-					 &xdg_surface_listener, window);
+		zxdg_surface_v6_add_listener(window->xdg_surface,
+					     &xdg_surface_listener, window);
 
-		xdg_surface_set_title(window->xdg_surface, "simple-dmabuf");
+		window->xdg_toplevel =
+			zxdg_surface_v6_get_toplevel(window->xdg_surface);
+
+		assert(window->xdg_toplevel);
+
+		zxdg_toplevel_v6_add_listener(window->xdg_toplevel,
+					      &xdg_toplevel_listener, window);
+
+		zxdg_toplevel_v6_set_title(window->xdg_toplevel, "simple-dmabuf");
+
+		window->wait_for_configure = true;
+		wl_surface_commit(window->surface);
 	} else if (display->fshell) {
 		zwp_fullscreen_shell_v1_present_surface(display->fshell,
 							window->surface,
@@ -340,7 +381,7 @@ create_window(struct display *display, int width, int height)
 		assert(0);
 	}
 
-	for (i = 0; i < 2; ++i) {
+	for (i = 0; i < NUM_BUFFERS; ++i) {
 		ret = create_dmabuf_buffer(display, &window->buffers[i],
 		                               width, height);
 
@@ -359,7 +400,7 @@ destroy_window(struct window *window)
 	if (window->callback)
 		wl_callback_destroy(window->callback);
 
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < NUM_BUFFERS; i++) {
 		if (!window->buffers[i].buffer)
 			continue;
 
@@ -369,8 +410,10 @@ destroy_window(struct window *window)
 		drm_shutdown(&window->buffers[i]);
 	}
 
+	if (window->xdg_toplevel)
+		zxdg_toplevel_v6_destroy(window->xdg_toplevel);
 	if (window->xdg_surface)
-		xdg_surface_destroy(window->xdg_surface);
+		zxdg_surface_v6_destroy(window->xdg_surface);
 	wl_surface_destroy(window->surface);
 	free(window);
 }
@@ -378,16 +421,13 @@ destroy_window(struct window *window)
 static struct buffer *
 window_next_buffer(struct window *window)
 {
-	struct buffer *buffer;
+	int i;
 
-	if (!window->buffers[0].busy)
-		buffer = &window->buffers[0];
-	else if (!window->buffers[1].busy)
-		buffer = &window->buffers[1];
-	else
-		return NULL;
+	for (i = 0; i < NUM_BUFFERS; i++)
+		if (!window->buffers[i].busy)
+			return &window->buffers[i];
 
-	return buffer;
+	return NULL;
 }
 
 static const struct wl_callback_listener frame_listener;
@@ -402,7 +442,7 @@ redraw(void *data, struct wl_callback *callback, uint32_t time)
 	if (!buffer) {
 		fprintf(stderr,
 			!callback ? "Failed to create the first buffer.\n" :
-			"Both buffers busy at redraw(). Server bug?\n");
+			"All buffers busy at redraw(). Server bug?\n");
 		abort();
 	}
 
@@ -438,20 +478,14 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 };
 
 static void
-xdg_shell_ping(void *data, struct xdg_shell *shell, uint32_t serial)
+xdg_shell_ping(void *data, struct zxdg_shell_v6 *shell, uint32_t serial)
 {
-	xdg_shell_pong(shell, serial);
+	zxdg_shell_v6_pong(shell, serial);
 }
 
-static const struct xdg_shell_listener xdg_shell_listener = {
+static const struct zxdg_shell_v6_listener xdg_shell_listener = {
 	xdg_shell_ping,
 };
-
-#define XDG_VERSION 5 /* The version of xdg-shell that we implement */
-#ifdef static_assert
-static_assert(XDG_VERSION == XDG_SHELL_VERSION_CURRENT,
-	      "Interface version doesn't match implementation version");
-#endif
 
 static void
 registry_handle_global(void *data, struct wl_registry *registry,
@@ -463,11 +497,10 @@ registry_handle_global(void *data, struct wl_registry *registry,
 		d->compositor =
 			wl_registry_bind(registry,
 					 id, &wl_compositor_interface, 1);
-	} else if (strcmp(interface, "xdg_shell") == 0) {
+	} else if (strcmp(interface, "zxdg_shell_v6") == 0) {
 		d->shell = wl_registry_bind(registry,
-					    id, &xdg_shell_interface, 1);
-		xdg_shell_use_unstable_version(d->shell, XDG_VERSION);
-		xdg_shell_add_listener(d->shell, &xdg_shell_listener, d);
+					    id, &zxdg_shell_v6_interface, 1);
+		zxdg_shell_v6_add_listener(d->shell, &xdg_shell_listener, d);
 	} else if (strcmp(interface, "zwp_fullscreen_shell_v1") == 0) {
 		d->fshell = wl_registry_bind(registry,
 					     id, &zwp_fullscreen_shell_v1_interface, 1);
@@ -531,7 +564,7 @@ destroy_display(struct display *display)
 		zwp_linux_dmabuf_v1_destroy(display->dmabuf);
 
 	if (display->shell)
-		xdg_shell_destroy(display->shell);
+		zxdg_shell_v6_destroy(display->shell);
 
 	if (display->fshell)
 		zwp_fullscreen_shell_v1_release(display->fshell);
@@ -575,7 +608,10 @@ main(int argc, char **argv)
 	if (!running)
 		return 1;
 
-	redraw(window, NULL, 0);
+	window->initialized = true;
+
+	if (!window->wait_for_configure)
+		redraw(window, NULL, 0);
 
 	while (running && ret != -1)
 		ret = wl_display_dispatch(display->display);

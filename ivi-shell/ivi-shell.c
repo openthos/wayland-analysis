@@ -35,6 +35,7 @@
  */
 #include "config.h"
 
+#include <stdint.h>
 #include <string.h>
 #include <dlfcn.h>
 #include <limits.h>
@@ -44,8 +45,9 @@
 #include "ivi-shell.h"
 #include "ivi-application-server-protocol.h"
 #include "ivi-layout-export.h"
-#include "ivi-layout-private.h"
+#include "ivi-layout-shell.h"
 #include "shared/helpers.h"
+#include "compositor/weston.h"
 
 /* Representation of ivi_surface protocol object. */
 struct ivi_shell_surface
@@ -63,8 +65,6 @@ struct ivi_shell_surface
 	int32_t height;
 
 	struct wl_list link;
-
-	struct wl_listener configured_listener;
 };
 
 struct ivi_shell_setting
@@ -78,46 +78,61 @@ struct ivi_shell_setting
  */
 
 static void
-surface_configure_notify(struct wl_listener *listener, void *data)
-{
-	struct ivi_layout_surface *layout_surf =
-		(struct ivi_layout_surface *)data;
-
-	struct ivi_shell_surface *shell_surf =
-		container_of(listener,
-			     struct ivi_shell_surface,
-			     configured_listener);
-
-	int32_t dest_width = 0;
-	int32_t dest_height = 0;
-
-	ivi_layout_surface_get_dimension(layout_surf,
-					 &dest_width, &dest_height);
-
-	if (shell_surf->resource)
-		ivi_surface_send_configure(shell_surf->resource,
-					   dest_width, dest_height);
-}
-
-static void
-ivi_shell_surface_configure(struct weston_surface *, int32_t, int32_t);
+ivi_shell_surface_committed(struct weston_surface *, int32_t, int32_t);
 
 static struct ivi_shell_surface *
 get_ivi_shell_surface(struct weston_surface *surface)
 {
-	if (surface->configure == ivi_shell_surface_configure)
-		return surface->configure_private;
+	struct ivi_shell_surface *shsurf;
 
-	return NULL;
+	if (surface->committed != ivi_shell_surface_committed)
+		return NULL;
+
+	shsurf = surface->committed_private;
+	assert(shsurf);
+	assert(shsurf->surface == surface);
+
+	return shsurf;
+}
+
+struct ivi_layout_surface *
+shell_get_ivi_layout_surface(struct weston_surface *surface)
+{
+	struct ivi_shell_surface *shsurf;
+
+	shsurf = get_ivi_shell_surface(surface);
+	if (!shsurf)
+		return NULL;
+
+	return shsurf->layout_surface;
+}
+
+void
+shell_surface_send_configure(struct weston_surface *surface,
+			     int32_t width, int32_t height)
+{
+	struct ivi_shell_surface *shsurf;
+
+	shsurf = get_ivi_shell_surface(surface);
+	assert(shsurf);
+	if (!shsurf)
+		return;
+
+	if (shsurf->resource)
+		ivi_surface_send_configure(shsurf->resource, width, height);
 }
 
 static void
-ivi_shell_surface_configure(struct weston_surface *surface,
+ivi_shell_surface_committed(struct weston_surface *surface,
 			    int32_t sx, int32_t sy)
 {
 	struct ivi_shell_surface *ivisurf = get_ivi_shell_surface(surface);
 
-	if (surface->width == 0 || surface->height == 0 || ivisurf == NULL)
+	assert(ivisurf);
+	if (!ivisurf)
+		return;
+
+	if (surface->width == 0 || surface->height == 0)
 		return;
 
 	if (ivisurf->width != surface->width ||
@@ -130,6 +145,19 @@ ivi_shell_surface_configure(struct weston_surface *surface,
 	}
 }
 
+static int
+ivi_shell_surface_get_label(struct weston_surface *surface,
+			    char *buf,
+			    size_t len)
+{
+	struct ivi_shell_surface *shell_surf = get_ivi_shell_surface(surface);
+
+	if (!shell_surf)
+		return snprintf(buf, len, "unidentified window in ivi-shell");
+
+	return snprintf(buf, len, "ivi-surface %#x", shell_surf->id_surface);
+}
+
 static void
 layout_surface_cleanup(struct ivi_shell_surface *ivisurf)
 {
@@ -138,8 +166,9 @@ layout_surface_cleanup(struct ivi_shell_surface *ivisurf)
 	ivi_layout_surface_destroy(ivisurf->layout_surface);
 	ivisurf->layout_surface = NULL;
 
-	ivisurf->surface->configure = NULL;
-	ivisurf->surface->configure_private = NULL;
+	ivisurf->surface->committed = NULL;
+	ivisurf->surface->committed_private = NULL;
+	weston_surface_set_label_func(ivisurf->surface, NULL);
 	ivisurf->surface = NULL;
 
 	// destroy weston_surface destroy signal.
@@ -258,9 +287,7 @@ application_surface_create(struct wl_client *client,
 	ivisurf->width = 0;
 	ivisurf->height = 0;
 	ivisurf->layout_surface = layout_surface;
-	ivisurf->configured_listener.notify = surface_configure_notify;
-	ivi_layout_surface_add_configured_listener(layout_surface,
-				     &ivisurf->configured_listener);
+
 	/*
 	 * The following code relies on wl_surface destruction triggering
 	 * immediateweston_surface destruction
@@ -271,8 +298,10 @@ application_surface_create(struct wl_client *client,
 
 	ivisurf->surface = weston_surface;
 
-	weston_surface->configure = ivi_shell_surface_configure;
-	weston_surface->configure_private = ivisurf;
+	weston_surface->committed = ivi_shell_surface_committed;
+	weston_surface->committed_private = ivisurf;
+	weston_surface_set_label_func(weston_surface,
+				      ivi_shell_surface_get_label);
 
 	res = wl_resource_create(client, &ivi_surface_interface, 1, id);
 	if (res == NULL) {
@@ -311,18 +340,10 @@ bind_ivi_application(struct wl_client *client,
 struct weston_view *
 get_default_view(struct weston_surface *surface)
 {
-	struct ivi_shell_surface *shsurf;
 	struct weston_view *view;
 
 	if (!surface || wl_list_empty(&surface->views))
 		return NULL;
-
-	shsurf = get_ivi_shell_surface(surface);
-	if (shsurf && shsurf->layout_surface) {
-		view = ivi_layout_get_weston_view(shsurf->layout_surface);
-		if (view)
-			return view;
-	}
 
 	wl_list_for_each(view, &surface->views, surface_link) {
 		if (weston_view_is_mapped(view))
@@ -371,7 +392,7 @@ init_ivi_shell(struct weston_compositor *compositor, struct ivi_shell *shell,
 
 	wl_list_init(&shell->ivi_surface_list);
 
-	weston_layer_init(&shell->input_panel_layer, NULL);
+	weston_layer_init(&shell->input_panel_layer, compositor);
 
 	if (setting->developermode) {
 		weston_install_debug_key_binding(compositor, MODIFIER_SUPER);
@@ -389,7 +410,7 @@ ivi_shell_setting_create(struct ivi_shell_setting *dest,
 			 int *argc, char *argv[])
 {
 	int result = 0;
-	struct weston_config *config = compositor->config;
+	struct weston_config *config = wet_get_config(compositor);
 	struct weston_config_section *section;
 
 	const struct weston_option ivi_shell_options[] = {
@@ -425,7 +446,7 @@ activate_binding(struct weston_seat *seat,
 	if (get_ivi_shell_surface(main_surface) == NULL)
 		return;
 
-	weston_surface_activate(focus, seat);
+	weston_seat_set_keyboard_focus(seat, focus);
 }
 
 static void
@@ -471,8 +492,8 @@ shell_add_bindings(struct weston_compositor *compositor,
  * Initialization of ivi-shell.
  */
 WL_EXPORT int
-module_init(struct weston_compositor *compositor,
-	    int *argc, char *argv[])
+wet_shell_init(struct weston_compositor *compositor,
+	       int *argc, char *argv[])
 {
 	struct ivi_shell *shell;
 	struct ivi_shell_setting setting = { };

@@ -1,0 +1,36 @@
+package com.dxmtb.westonapp;
+
+message KeyEvent {
+  enum ActionType {
+    ACTION_DOWN = 0;
+    ACTION_UP = 1;
+  }
+  required ActionType action_type = 1;
+  required uint32 key = 2;
+}
+
+message MotionEvent {
+  enum ActionType {
+      ACTION_HOVER_MOVE = 7;
+      ACTION_SCROLL = 8;
+      ACTION_BUTTON_PRESS = 11;
+      ACTION_BUTTON_RELEASE = 12;
+  }
+  required ActionType action_type = 1;
+  optional int32 x = 2;
+  optional int32 y = 3;
+  optional float axis = 4;
+  optional int32 button = 5;
+};
+
+
+message InputEventProto {
+  enum EventType {
+    KeyEventType = 0;
+    MotionEventType = 1;
+  }
+  required EventType type = 1;
+  required uint64 time = 2;
+  optional KeyEvent key_event = 3;
+  optional MotionEvent motion_event = 4;
+}

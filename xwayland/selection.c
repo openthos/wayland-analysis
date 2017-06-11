@@ -25,6 +25,7 @@
 
 #include "config.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -117,7 +118,7 @@ weston_wm_get_incr_chunk(struct weston_wm *wm)
 	dump_property(wm, wm->atom.wl_selection, reply);
 
 	if (xcb_get_property_value_length(reply) > 0) {
-		/* reply's ownership is transfered to wm, which is responsible
+		/* reply's ownership is transferred to wm, which is responsible
 		 * for freeing it */
 		weston_wm_write_property(wm, reply);
 	} else {
@@ -251,7 +252,7 @@ weston_wm_get_selection_data(struct weston_wm *wm)
 		free(reply);
 	} else {
 		wm->incr = 0;
-		/* reply's ownership is transfered to wm, which is responsible
+		/* reply's ownership is transferred to wm, which is responsible
 		 * for freeing it */
 		weston_wm_write_property(wm, reply);
 	}
@@ -405,7 +406,7 @@ weston_wm_read_data_source(int fd, uint32_t mask, void *data)
 			wm->property_source = NULL;
 		} else {
 			weston_log("got %zu bytes, "
-				"property deleted, seting new property\n",
+				"property deleted, setting new property\n",
 				wm->source_data.size);
 			weston_wm_flush_source_data(wm);
 		}
@@ -429,7 +430,7 @@ weston_wm_read_data_source(int fd, uint32_t mask, void *data)
 				"property delete\n", wm->source_data.size);
 		} else {
 			weston_log("got %zu bytes, "
-				"property deleted, seting new property\n",
+				"property deleted, setting new property\n",
 				wm->source_data.size);
 			weston_wm_flush_source_data(wm);
 		}
@@ -708,6 +709,8 @@ weston_wm_selection_init(struct weston_wm *wm)
 					  wm->atom.clipboard, mask);
 
 	seat = weston_wm_pick_seat(wm);
+	if (seat == NULL)
+		return;
 	wm->selection_listener.notify = weston_wm_set_selection;
 	wl_signal_add(&seat->selection_signal, &wm->selection_listener);
 

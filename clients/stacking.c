@@ -24,6 +24,7 @@
 #include "config.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@
 
 #include <linux/input.h>
 #include <cairo.h>
+#include <wayland-util.h>
 
 #include "shared/helpers.h"
 #include "window.h"
@@ -183,7 +185,7 @@ fullscreen_handler(struct window *window, void *data)
 
 static void
 draw_string(cairo_t *cr,
-            const char *fmt, ...) __attribute__((format (gnu_printf, 2, 3)));
+            const char *fmt, ...) WL_PRINTF(2, 3);
 
 static void
 draw_string(cairo_t *cr,
@@ -285,10 +287,6 @@ main(int argc, char *argv[])
 	struct stacking stacking;
 
 	memset(&stacking, 0, sizeof stacking);
-
-#ifdef HAVE_PANGO
-	g_type_init();
-#endif
 
 	stacking.display = display_create(&argc, argv);
 	if (stacking.display == NULL) {

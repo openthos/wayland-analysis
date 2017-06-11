@@ -24,6 +24,8 @@
 
 #include "config.h"
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +36,7 @@
 #include "window.h"
 #include "input-method-unstable-v1-client-protocol.h"
 #include "text-input-unstable-v1-client-protocol.h"
+#include "shared/xalloc.h"
 
 struct keyboard;
 
@@ -55,6 +58,7 @@ struct virtual_keyboard {
 	char *surrounding_text;
 	uint32_t surrounding_cursor;
 	struct keyboard *keyboard;
+	bool toplevel;
 };
 
 enum key_type {
@@ -952,11 +956,34 @@ global_handler(struct display *display, uint32_t name,
 }
 
 static void
-keyboard_create(struct output *output, struct virtual_keyboard *virtual_keyboard)
+set_toplevel(struct output *output, struct virtual_keyboard *virtual_keyboard)
+{
+	struct zwp_input_panel_surface_v1 *ips;
+	struct keyboard *keyboard = virtual_keyboard->keyboard;
+
+	ips = zwp_input_panel_v1_get_input_panel_surface(virtual_keyboard->input_panel,
+							 window_get_wl_surface(keyboard->window));
+
+	zwp_input_panel_surface_v1_set_toplevel(ips,
+						output_get_wl_output(output),
+						ZWP_INPUT_PANEL_SURFACE_V1_POSITION_CENTER_BOTTOM);
+
+	virtual_keyboard->toplevel = true;
+}
+
+static void
+display_output_handler(struct output *output, void *data) {
+	struct virtual_keyboard *keyboard = data;
+
+	if (!keyboard->toplevel)
+		set_toplevel(output, keyboard);
+}
+
+static void
+keyboard_create(struct virtual_keyboard *virtual_keyboard)
 {
 	struct keyboard *keyboard;
 	const struct layout *layout;
-	struct zwp_input_panel_surface_v1 *ips;
 
 	layout = get_current_layout(virtual_keyboard);
 
@@ -980,20 +1007,14 @@ keyboard_create(struct output *output, struct virtual_keyboard *virtual_keyboard
 			       layout->columns * key_width,
 			       layout->rows * key_height);
 
-
-	ips = zwp_input_panel_v1_get_input_panel_surface(virtual_keyboard->input_panel,
-							 window_get_wl_surface(keyboard->window));
-
-	zwp_input_panel_surface_v1_set_toplevel(ips,
-						output_get_wl_output(output),
-						ZWP_INPUT_PANEL_SURFACE_V1_POSITION_CENTER_BOTTOM);
+	display_set_output_configure_handler(virtual_keyboard->display,
+					     display_output_handler);
 }
 
 int
 main(int argc, char *argv[])
 {
 	struct virtual_keyboard virtual_keyboard;
-	struct output *output;
 
 	memset(&virtual_keyboard, 0, sizeof virtual_keyboard);
 
@@ -1011,8 +1032,7 @@ main(int argc, char *argv[])
 		return -1;
 	}
 
-	output = display_get_output(virtual_keyboard.display);
-	keyboard_create(output, &virtual_keyboard);
+	keyboard_create(&virtual_keyboard);
 
 	display_run(virtual_keyboard.display);
 

@@ -26,16 +26,15 @@
 #ifndef WESTON_PLATFORM_H
 #define WESTON_PLATFORM_H
 
+#include <stdbool.h>
 #include <string.h>
 
 #ifdef ENABLE_EGL
 #include <wayland-egl.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#endif
 
-#ifndef EGL_PLATFORM_WAYLAND_KHR
-#define EGL_PLATFORM_WAYLAND_KHR 0x31D8
+#include "weston-egl-ext.h"
 #endif
 
 #ifdef  __cplusplus
@@ -44,24 +43,42 @@ extern "C" {
 
 #ifdef ENABLE_EGL
 
-#ifndef EGL_EXT_platform_base
-typedef EGLDisplay (*PFNEGLGETPLATFORMDISPLAYEXTPROC) (EGLenum platform,
-						       void *native_display,
-						       const EGLint *attrib_list);
-typedef EGLSurface (*PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC) (EGLDisplay dpy,
-								EGLConfig config,
-								void *native_window,
-								const EGLint *attrib_list);
-#endif
+static bool
+weston_check_egl_extension(const char *extensions, const char *extension)
+{
+	size_t extlen = strlen(extension);
+	const char *end = extensions + strlen(extensions);
+
+	while (extensions < end) {
+		size_t n = 0;
+
+		/* Skip whitespaces, if any */
+		if (*extensions == ' ') {
+			extensions++;
+			continue;
+		}
+
+		n = strcspn(extensions, " ");
+
+		/* Compare strings */
+		if (n == extlen && strncmp(extension, extensions, n) == 0)
+			return true; /* Found */
+
+		extensions += n;
+	}
+
+	/* Not found */
+	return false;
+}
 
 static inline void *
 weston_platform_get_egl_proc_address(const char *address)
 {
 	const char *extensions = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
 
-	if (extensions
-	    && (strstr(extensions, "EGL_EXT_platform_wayland")
-	        || strstr(extensions, "EGL_KHR_platform_wayland"))) {
+	if (extensions &&
+	    (weston_check_egl_extension(extensions, "EGL_EXT_platform_wayland") ||
+	     weston_check_egl_extension(extensions, "EGL_KHR_platform_wayland"))) {
 		return (void *) eglGetProcAddress(address);
 	}
 
@@ -75,8 +92,9 @@ weston_platform_get_egl_display(EGLenum platform, void *native_display,
 	static PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display = NULL;
 
 	if (!get_platform_display) {
-		get_platform_display = weston_platform_get_egl_proc_address(
-			"eglGetPlatformDisplayEXT");
+		get_platform_display = (PFNEGLGETPLATFORMDISPLAYEXTPROC)
+            weston_platform_get_egl_proc_address(
+                "eglGetPlatformDisplayEXT");
 	}
 
 	if (get_platform_display)
@@ -95,8 +113,9 @@ weston_platform_create_egl_surface(EGLDisplay dpy, EGLConfig config,
 		create_platform_window = NULL;
 
 	if (!create_platform_window) {
-		create_platform_window = weston_platform_get_egl_proc_address(
-				"eglCreatePlatformWindowSurfaceEXT");
+		create_platform_window = (PFNEGLCREATEPLATFORMWINDOWSURFACEEXTPROC)
+            weston_platform_get_egl_proc_address(
+                "eglCreatePlatformWindowSurfaceEXT");
 	}
 
 	if (create_platform_window)
@@ -107,6 +126,13 @@ weston_platform_create_egl_surface(EGLDisplay dpy, EGLConfig config,
 	return eglCreateWindowSurface(dpy, config,
 				      (EGLNativeWindowType) native_window,
 				      attrib_list);
+}
+
+static inline EGLBoolean
+weston_platform_destroy_egl_surface(EGLDisplay display,
+				    EGLSurface surface)
+{
+	return eglDestroySurface(display, surface);
 }
 
 #else /* ENABLE_EGL */
@@ -124,6 +150,13 @@ weston_platform_create_egl_surface(void *dpy, void *config,
 				   const int *attrib_list)
 {
 	return NULL;
+}
+
+static inline unsigned int
+weston_platform_destroy_egl_surface(void *display,
+				    void *surface)
+{
+	return 1;
 }
 #endif /* ENABLE_EGL */
 

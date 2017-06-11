@@ -26,6 +26,7 @@
 #include "config.h"
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -33,24 +34,14 @@
 #include <sys/mman.h>
 #include <cairo.h>
 
-#include "zalloc.h"
 #include "shared/os-compatibility.h"
+#include "shared/xalloc.h"
+#include "shared/zalloc.h"
 #include "weston-test-client-helper.h"
 
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 #define min(a, b) (((a) > (b)) ? (b) : (a))
 #define clip(x, a, b)  min(max(x, a), b)
-
-void *
-fail_on_null(void *p)
-{
-	if (p == NULL) {
-		fprintf(stderr, "out of memory\n");
-		exit(EXIT_FAILURE);
-	}
-	return p;
-}
-
 
 int
 surface_contains(struct surface *surface, int x, int y)
@@ -113,7 +104,7 @@ move_client(struct client *client, int x, int y)
 	/* The attach here is necessary because commit() will call configure
 	 * only on surfaces newly attached, and the one that sets the surface
 	 * position is the configure. */
-	wl_surface_attach(surface->wl_surface, surface->wl_buffer, 0, 0);
+	wl_surface_attach(surface->wl_surface, surface->buffer->proxy, 0, 0);
 	wl_surface_damage(surface->wl_surface, 0, 0, surface->width,
 			  surface->height);
 
@@ -124,17 +115,6 @@ move_client(struct client *client, int x, int y)
 	frame_callback_wait(client, &done);
 }
 
-int
-get_n_egl_buffers(struct client *client)
-{
-	client->test->n_egl_buffers = -1;
-
-	weston_test_get_n_egl_buffers(client->test->weston_test);
-	wl_display_roundtrip(client->wl_display);
-
-	return client->test->n_egl_buffers;
-}
-
 static void
 pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 		     uint32_t serial, struct wl_surface *wl_surface,
@@ -142,7 +122,11 @@ pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
 {
 	struct pointer *pointer = data;
 
-	pointer->focus = wl_surface_get_user_data(wl_surface);
+	if (wl_surface)
+		pointer->focus = wl_surface_get_user_data(wl_surface);
+	else
+		pointer->focus = NULL;
+
 	pointer->x = wl_fixed_to_int(x);
 	pointer->y = wl_fixed_to_int(y);
 
@@ -159,7 +143,7 @@ pointer_handle_leave(void *data, struct wl_pointer *wl_pointer,
 	pointer->focus = NULL;
 
 	fprintf(stderr, "test-client: got pointer leave, surface %p\n",
-		wl_surface_get_user_data(wl_surface));
+		wl_surface ? wl_surface_get_user_data(wl_surface) : NULL);
 }
 
 static void
@@ -253,7 +237,10 @@ keyboard_handle_enter(void *data, struct wl_keyboard *wl_keyboard,
 {
 	struct keyboard *keyboard = data;
 
-	keyboard->focus = wl_surface_get_user_data(wl_surface);
+	if (wl_surface)
+		keyboard->focus = wl_surface_get_user_data(wl_surface);
+	else
+		keyboard->focus = NULL;
 
 	fprintf(stderr, "test-client: got keyboard enter, surface %p\n",
 		keyboard->focus);
@@ -268,7 +255,7 @@ keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
 	keyboard->focus = NULL;
 
 	fprintf(stderr, "test-client: got keyboard leave, surface %p\n",
-		wl_surface_get_user_data(wl_surface));
+		wl_surface ? wl_surface_get_user_data(wl_surface) : NULL);
 }
 
 static void
@@ -417,37 +404,80 @@ static const struct wl_surface_listener surface_listener = {
 	surface_leave
 };
 
-struct wl_buffer *
-create_shm_buffer(struct client *client, int width, int height, void **pixels)
+static struct buffer *
+create_shm_buffer(struct client *client, int width, int height,
+		  pixman_format_code_t format, uint32_t wlfmt)
 {
 	struct wl_shm *shm = client->wl_shm;
-	int stride = width * 4;
-	int size = stride * height;
+	struct buffer *buf;
+	size_t stride_bytes;
 	struct wl_shm_pool *pool;
-	struct wl_buffer *buffer;
 	int fd;
 	void *data;
+	size_t bytes_pp;
 
-	fd = os_create_anonymous_file(size);
+	assert(width > 0);
+	assert(height > 0);
+
+	buf = xzalloc(sizeof *buf);
+
+	bytes_pp = PIXMAN_FORMAT_BPP(format) / 8;
+	stride_bytes = width * bytes_pp;
+	/* round up to multiple of 4 bytes for Pixman */
+	stride_bytes = (stride_bytes + 3) & ~3u;
+	assert(stride_bytes / bytes_pp >= (unsigned)width);
+
+	buf->len = stride_bytes * height;
+	assert(buf->len / stride_bytes == (unsigned)height);
+
+	fd = os_create_anonymous_file(buf->len);
 	assert(fd >= 0);
 
-	data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	data = mmap(NULL, buf->len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	if (data == MAP_FAILED) {
 		close(fd);
 		assert(data != MAP_FAILED);
 	}
 
-	pool = wl_shm_create_pool(shm, fd, size);
-	buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride,
-					   WL_SHM_FORMAT_ARGB8888);
+	pool = wl_shm_create_pool(shm, fd, buf->len);
+	buf->proxy = wl_shm_pool_create_buffer(pool, 0, width, height,
+					       stride_bytes, wlfmt);
 	wl_shm_pool_destroy(pool);
-
 	close(fd);
 
-	if (pixels)
-		*pixels = data;
+	buf->image = pixman_image_create_bits(format, width, height,
+					      data, stride_bytes);
 
-	return buffer;
+	assert(buf->proxy);
+	assert(buf->image);
+
+	return buf;
+}
+
+struct buffer *
+create_shm_buffer_a8r8g8b8(struct client *client, int width, int height)
+{
+	assert(client->has_argb);
+
+	return create_shm_buffer(client, width, height,
+				 PIXMAN_a8r8g8b8, WL_SHM_FORMAT_ARGB8888);
+}
+
+void
+buffer_destroy(struct buffer *buf)
+{
+	void *pixels;
+
+	pixels = pixman_image_get_data(buf->image);
+
+	if (buf->proxy) {
+		wl_buffer_destroy(buf->proxy);
+		assert(munmap(pixels, buf->len) == 0);
+	}
+
+	assert(pixman_image_unref(buf->image));
+
+	free(buf);
 }
 
 static void
@@ -476,14 +506,6 @@ test_handle_pointer_position(void *data, struct weston_test *weston_test,
 }
 
 static void
-test_handle_n_egl_buffers(void *data, struct weston_test *weston_test, uint32_t n)
-{
-	struct test *test = data;
-
-	test->n_egl_buffers = n;
-}
-
-static void
 test_handle_capture_screenshot_done(void *data, struct weston_test *weston_test)
 {
 	struct test *test = data;
@@ -494,7 +516,6 @@ test_handle_capture_screenshot_done(void *data, struct weston_test *weston_test)
 
 static const struct weston_test_listener test_listener = {
 	test_handle_pointer_position,
-	test_handle_n_egl_buffers,
 	test_handle_capture_screenshot_done,
 };
 
@@ -848,6 +869,8 @@ create_client_and_test_surface(int x, int y, int width, int height)
 {
 	struct client *client;
 	struct surface *surface;
+	pixman_color_t color = { 16384, 16384, 16384, 16384 }; /* uint16_t */
+	pixman_image_t *solid;
 
 	client = create_client();
 
@@ -865,10 +888,18 @@ create_client_and_test_surface(int x, int y, int width, int height)
 
 	surface->width = width;
 	surface->height = height;
-	surface->wl_buffer = create_shm_buffer(client, width, height,
-					       &surface->data);
+	surface->buffer = create_shm_buffer_a8r8g8b8(client, width, height);
 
-	memset(surface->data, 64, width * height * 4);
+	solid = pixman_image_create_solid_fill(&color);
+	pixman_image_composite32(PIXMAN_OP_SRC,
+				 solid, /* src */
+				 NULL, /* mask */
+				 surface->buffer->image, /* dst */
+				 0, 0, /* src x,y */
+				 0, 0, /* mask x,y */
+				 0, 0, /* dst x,y */
+				 width, height);
+	pixman_image_unref(solid);
 
 	move_client(client, x, y);
 
@@ -881,9 +912,10 @@ output_path(void)
 	char *path = getenv("WESTON_TEST_OUTPUT_PATH");
 
 	if (!path)
-		return ".";
+		return "./logs";
+
 	return path;
-	}
+}
 
 char*
 screenshot_output_filename(const char *basename, uint32_t seq)
@@ -917,153 +949,364 @@ screenshot_reference_filename(const char *basename, uint32_t seq)
 	return filename;
 }
 
-/**
- * check_surfaces_geometry() - verifies two surfaces are same size
- *
- * @returns true if surfaces have the same width and height, or false
- * if not, or if there is no actual data.
- */
-bool
-check_surfaces_geometry(const struct surface *a, const struct surface *b)
+struct format_map_entry {
+	cairo_format_t cairo;
+	pixman_format_code_t pixman;
+};
+
+static const struct format_map_entry format_map[] = {
+	{ CAIRO_FORMAT_ARGB32,    PIXMAN_a8r8g8b8 },
+	{ CAIRO_FORMAT_RGB24,     PIXMAN_x8r8g8b8 },
+	{ CAIRO_FORMAT_A8,        PIXMAN_a8 },
+	{ CAIRO_FORMAT_RGB16_565, PIXMAN_r5g6b5 },
+};
+
+static pixman_format_code_t
+format_cairo2pixman(cairo_format_t fmt)
 {
-	if (a == NULL || b == NULL) {
-		printf("Undefined surfaces\n");
-		return false;
-	}
-	else if (a->data == NULL || b->data == NULL) {
-		printf("Undefined data\n");
-		return false;
-	}
-	else if (a->width != b->width || a->height != b->height) {
-		printf("Mismatched dimensions:  %d,%d != %d,%d\n",
-		       a->width, a->height, b->width, b->height);
-		return false;
-	}
-	return true;
+	unsigned i;
+
+	for (i = 0; i < ARRAY_LENGTH(format_map); i++)
+		if (format_map[i].cairo == fmt)
+			return format_map[i].pixman;
+
+	assert(0 && "unknown Cairo pixel format");
+}
+
+static cairo_format_t
+format_pixman2cairo(pixman_format_code_t fmt)
+{
+	unsigned i;
+
+	for (i = 0; i < ARRAY_LENGTH(format_map); i++)
+		if (format_map[i].pixman == fmt)
+			return format_map[i].cairo;
+
+	assert(0 && "unknown Pixman pixel format");
 }
 
 /**
- * check_surfaces_equal() - tests if two surfaces are pixel-identical
+ * Compute the ROI for image comparisons
  *
- * Returns true if surface buffers have all the same byte values,
- * false if the surfaces don't match or can't be compared due to
- * different dimensions.
+ * \param img_a An image.
+ * \param img_b Another image.
+ * \param clip_rect Explicit ROI, or NULL for using the whole
+ * image area.
+ *
+ * \return The region of interest (ROI) that is guaranteed to be inside both
+ * images.
+ *
+ * If clip_rect is given, it must fall inside of both images.
+ * If clip_rect is NULL, the images must be of the same size.
+ * If any precondition is violated, this function aborts with an error.
+ *
+ * The ROI is given as pixman_box32_t, where x2,y2 are non-inclusive.
  */
-bool
-check_surfaces_equal(const struct surface *a, const struct surface *b)
+static pixman_box32_t
+image_check_get_roi(pixman_image_t *img_a, pixman_image_t *img_b,
+		   const struct rectangle *clip_rect)
 {
-	int bpp = 4;  /* Assumes ARGB */
+	int width_a;
+	int width_b;
+	int height_a;
+	int height_b;
+	pixman_box32_t box;
 
-	if (!check_surfaces_geometry(a, b))
-		return false;
+	width_a = pixman_image_get_width(img_a);
+	height_a = pixman_image_get_height(img_a);
 
-	return (memcmp(a->data, b->data, bpp * a->width * a->height) == 0);
+	width_b = pixman_image_get_width(img_b);
+	height_b = pixman_image_get_height(img_b);
+
+	if (clip_rect) {
+		box.x1 = clip_rect->x;
+		box.y1 = clip_rect->y;
+		box.x2 = clip_rect->x + clip_rect->width;
+		box.y2 = clip_rect->y + clip_rect->height;
+	} else {
+		box.x1 = 0;
+		box.y1 = 0;
+		box.x2 = max(width_a, width_b);
+		box.y2 = max(height_a, height_b);
+	}
+
+	assert(box.x1 >= 0);
+	assert(box.y1 >= 0);
+	assert(box.x2 > box.x1);
+	assert(box.y2 > box.y1);
+	assert(box.x2 <= width_a);
+	assert(box.x2 <= width_b);
+	assert(box.y2 <= height_a);
+	assert(box.y2 <= height_b);
+
+	return box;
+}
+
+struct image_iterator {
+	char *data;
+	int stride; /* bytes */
+};
+
+static void
+image_iter_init(struct image_iterator *it, pixman_image_t *image)
+{
+	pixman_format_code_t fmt;
+
+	it->stride = pixman_image_get_stride(image);
+	it->data = (void *)pixman_image_get_data(image);
+
+	fmt = pixman_image_get_format(image);
+	assert(PIXMAN_FORMAT_BPP(fmt) == 32);
+}
+
+static uint32_t *
+image_iter_get_row(struct image_iterator *it, int y)
+{
+	return (uint32_t *)(it->data + y * it->stride);
 }
 
 /**
- * check_surfaces_match_in_clip() - tests if a given region within two
- * surfaces are pixel-identical.
+ * Test if a given region within two images are pixel-identical.
  *
- * Returns true if the two surfaces have the same byte values within the
- * given clipping region, or false if they don't match or the surfaces
- * can't be compared.
+ * Returns true if the two images pixel-wise identical, and false otherwise.
+ *
+ * \param img_a First image.
+ * \param img_b Second image.
+ * \param clip_rect The region of interest, or NULL for comparing the whole
+ * images.
+ *
+ * This function hard-fails if clip_rect is not inside both images. If clip_rect
+ * is given, the images do not have to match in size, otherwise size mismatch
+ * will be a hard failure.
  */
 bool
-check_surfaces_match_in_clip(const struct surface *a, const struct surface *b, const struct rectangle *clip_rect)
+check_images_match(pixman_image_t *img_a, pixman_image_t *img_b,
+		   const struct rectangle *clip_rect)
 {
-	int i, j;
-	int x0, y0, x1, y1;
-	void *p, *q;
-	int bpp = 4;  /* Assumes ARGB */
+	struct image_iterator it_a;
+	struct image_iterator it_b;
+	pixman_box32_t box;
+	int x, y;
+	uint32_t *pix_a;
+	uint32_t *pix_b;
 
-	if (!check_surfaces_geometry(a, b) || clip_rect == NULL)
-		return false;
+	box = image_check_get_roi(img_a, img_b, clip_rect);
 
-	if (clip_rect->x > a->width || clip_rect->y > a->height) {
-		printf("Clip outside image boundaries\n");
-		return true;
-	}
+	image_iter_init(&it_a, img_a);
+	image_iter_init(&it_b, img_b);
 
-	x0 = max(0, clip_rect->x);
-	y0 = max(0, clip_rect->y);
-	x1 = min(a->width,  clip_rect->x + clip_rect->width);
-	y1 = min(a->height, clip_rect->y + clip_rect->height);
+	for (y = box.y1; y < box.y2; y++) {
+		pix_a = image_iter_get_row(&it_a, y) + box.x1;
+		pix_b = image_iter_get_row(&it_b, y) + box.x1;
 
-	if (x0 == x1 || y0 == y1) {
-		printf("Degenerate comparison\n");
-		return true;
-	}
+		for (x = box.x1; x < box.x2; x++) {
+			if (*pix_a != *pix_b)
+				return false;
 
-	printf("Bytewise comparison inside clip\n");
-	for (i=y0; i<y1; i++) {
-		p = a->data + i * a->width * bpp + x0 * bpp;
-		q = b->data + i * b->width * bpp + x0 * bpp;
-		if (memcmp(p, q, (x1-x0)*bpp) != 0) {
-			/* Dump the bad row */
-			printf("Mismatched image on row %d\n", i);
-			for (j=0; j<(x1-x0)*bpp; j++) {
-				char a_char = *((char*)(p+j*bpp));
-				char b_char = *((char*)(q+j*bpp));
-				printf("%d,%d: %8x %8x %s\n", i, j, a_char, b_char,
-				       (a_char != b_char)? " <---": "");
-			}
-			return false;
+			pix_a++;
+			pix_b++;
 		}
 	}
 
 	return true;
 }
 
-/** write_surface_as_png()
+/**
+ * Tint a color
  *
- * Writes out a given weston test surface to disk as a PNG image
- * using the provided filename (with path).
+ * \param src Source pixel as x8r8g8b8.
+ * \param add The tint as x8r8g8b8, x8 must be zero; r8, g8 and b8 must be
+ * no greater than 0xc0 to avoid overflow to another channel.
+ * \return The tinted pixel color as x8r8g8b8, x8 guaranteed to be 0xff.
  *
- * @returns true if successfully saved file; false otherwise.
+ * The source pixel RGB values are divided by 4, and then the tint is added.
+ * To achieve colors outside of the range of src, a tint color channel must be
+ * at least 0x40. (0xff / 4 = 0x3f, 0xff - 0x3f = 0xc0)
+ */
+static uint32_t
+tint(uint32_t src, uint32_t add)
+{
+	uint32_t v;
+
+	v = ((src & 0xfcfcfcfc) >> 2) | 0xff000000;
+
+	return v + add;
+}
+
+/**
+ * Create a visualization of image differences.
+ *
+ * \param img_a First image, which is used as the basis for the output.
+ * \param img_b Second image.
+ * \param clip_rect The region of interest, or NULL for comparing the whole
+ * images.
+ * \return A new image with the differences highlighted.
+ *
+ * Regions outside of the region of interest are shaded with black, matching
+ * pixels are shaded with green, and differing pixels are shaded with
+ * bright red.
+ *
+ * This function hard-fails if clip_rect is not inside both images. If clip_rect
+ * is given, the images do not have to match in size, otherwise size mismatch
+ * will be a hard failure.
+ */
+pixman_image_t *
+visualize_image_difference(pixman_image_t *img_a, pixman_image_t *img_b,
+			   const struct rectangle *clip_rect)
+{
+	pixman_image_t *diffimg;
+	pixman_image_t *shade;
+	struct image_iterator it_a;
+	struct image_iterator it_b;
+	struct image_iterator it_d;
+	int width;
+	int height;
+	pixman_box32_t box;
+	int x, y;
+	uint32_t *pix_a;
+	uint32_t *pix_b;
+	uint32_t *pix_d;
+	pixman_color_t shade_color = { 0, 0, 0, 32768 };
+
+	width = pixman_image_get_width(img_a);
+	height = pixman_image_get_height(img_a);
+	box = image_check_get_roi(img_a, img_b, clip_rect);
+
+	diffimg = pixman_image_create_bits_no_clear(PIXMAN_x8r8g8b8,
+						    width, height, NULL, 0);
+
+	/* Fill diffimg with a black-shaded copy of img_a, and then fill
+	 * the clip_rect area with original img_a.
+	 */
+	shade = pixman_image_create_solid_fill(&shade_color);
+	pixman_image_composite32(PIXMAN_OP_SRC, img_a, shade, diffimg,
+				 0, 0, 0, 0, 0, 0, width, height);
+	pixman_image_unref(shade);
+	pixman_image_composite32(PIXMAN_OP_SRC, img_a, NULL, diffimg,
+				 box.x1, box.y1, 0, 0, box.x1, box.y1,
+				 box.x2 - box.x1, box.y2 - box.y1);
+
+	image_iter_init(&it_a, img_a);
+	image_iter_init(&it_b, img_b);
+	image_iter_init(&it_d, diffimg);
+
+	for (y = box.y1; y < box.y2; y++) {
+		pix_a = image_iter_get_row(&it_a, y) + box.x1;
+		pix_b = image_iter_get_row(&it_b, y) + box.x1;
+		pix_d = image_iter_get_row(&it_d, y) + box.x1;
+
+		for (x = box.x1; x < box.x2; x++) {
+			if (*pix_a == *pix_b)
+				*pix_d = tint(*pix_d, 0x00008000); /* green */
+			else
+				*pix_d = tint(*pix_d, 0x00c00000); /* red */
+
+			pix_a++;
+			pix_b++;
+			pix_d++;
+		}
+	}
+
+	return diffimg;
+}
+
+/**
+ * Write an image into a PNG file.
+ *
+ * \param image The image.
+ * \param fname The name and path for the file.
+ *
+ * \returns true if successfully saved file; false otherwise.
+ *
+ * \note Only image formats directly supported by Cairo are accepted, not all
+ * Pixman formats.
  */
 bool
-write_surface_as_png(const struct surface *weston_surface, const char *fname)
+write_image_as_png(pixman_image_t *image, const char *fname)
 {
 	cairo_surface_t *cairo_surface;
 	cairo_status_t status;
-	int bpp = 4; /* Assume ARGB */
-	int stride = bpp * weston_surface->width;
+	cairo_format_t fmt;
 
-	cairo_surface = cairo_image_surface_create_for_data(weston_surface->data,
-							    CAIRO_FORMAT_ARGB32,
-							    weston_surface->width,
-							    weston_surface->height,
-							    stride);
-	printf("Writing PNG to disk\n");
+	fmt = format_pixman2cairo(pixman_image_get_format(image));
+
+	cairo_surface = cairo_image_surface_create_for_data(
+			(void *)pixman_image_get_data(image),
+			fmt,
+			pixman_image_get_width(image),
+			pixman_image_get_height(image),
+			pixman_image_get_stride(image));
+
 	status = cairo_surface_write_to_png(cairo_surface, fname);
 	if (status != CAIRO_STATUS_SUCCESS) {
-		printf("Failed to save screenshot: %s\n",
-		       cairo_status_to_string(status));
+		fprintf(stderr, "Failed to save image '%s': %s\n", fname,
+			cairo_status_to_string(status));
+
 		return false;
 	}
+
 	cairo_surface_destroy(cairo_surface);
+
 	return true;
 }
 
-/** load_surface_from_png()
+static pixman_image_t *
+image_convert_to_a8r8g8b8(pixman_image_t *image)
+{
+	pixman_image_t *ret;
+	int width;
+	int height;
+
+	if (pixman_image_get_format(image) == PIXMAN_a8r8g8b8)
+		return pixman_image_ref(image);
+
+	width = pixman_image_get_width(image);
+	height = pixman_image_get_height(image);
+
+	ret = pixman_image_create_bits_no_clear(PIXMAN_a8r8g8b8, width, height,
+						NULL, 0);
+	assert(ret);
+
+	pixman_image_composite32(PIXMAN_OP_SRC, image, NULL, ret,
+				 0, 0, 0, 0, 0, 0, width, height);
+
+	return ret;
+}
+
+static void
+destroy_cairo_surface(pixman_image_t *image, void *data)
+{
+	cairo_surface_t *surface = data;
+
+	cairo_surface_destroy(surface);
+}
+
+/**
+ * Load an image from a PNG file
  *
  * Reads a PNG image from disk using the given filename (and path)
- * and returns as a freshly allocated weston test surface.
+ * and returns as a Pixman image. Use pixman_image_unref() to free it.
  *
- * @returns weston test surface with image, which should be free'd
- * when no longer used; or, NULL in case of error.
+ * The returned image is always in PIXMAN_a8r8g8b8 format.
+ *
+ * @returns Pixman image, or NULL in case of error.
  */
-struct surface *
-load_surface_from_png(const char *fname)
+pixman_image_t *
+load_image_from_png(const char *fname)
 {
-	struct surface *reference;
+	pixman_image_t *image;
+	pixman_image_t *converted;
+	cairo_format_t cairo_fmt;
+	pixman_format_code_t pixman_fmt;
 	cairo_surface_t *reference_cairo_surface;
 	cairo_status_t status;
-	size_t source_data_size;
-	int bpp;
+	int width;
+	int height;
 	int stride;
+	void *data;
 
 	reference_cairo_surface = cairo_image_surface_create_from_png(fname);
+	cairo_surface_flush(reference_cairo_surface);
 	status = cairo_surface_status(reference_cairo_surface);
 	if (status != CAIRO_STATUS_SUCCESS) {
 		printf("Could not open %s: %s\n", fname, cairo_status_to_string(status));
@@ -1071,92 +1314,51 @@ load_surface_from_png(const char *fname)
 		return NULL;
 	}
 
-	/* Disguise the cairo surface in a weston test surface */
-	reference = zalloc(sizeof *reference);
-	if (reference == NULL) {
-		perror("zalloc reference");
-		cairo_surface_destroy(reference_cairo_surface);
-		return NULL;
-	}
-	reference->width = cairo_image_surface_get_width(reference_cairo_surface);
-	reference->height = cairo_image_surface_get_height(reference_cairo_surface);
+	cairo_fmt = cairo_image_surface_get_format(reference_cairo_surface);
+	pixman_fmt = format_cairo2pixman(cairo_fmt);
+
+	width = cairo_image_surface_get_width(reference_cairo_surface);
+	height = cairo_image_surface_get_height(reference_cairo_surface);
 	stride = cairo_image_surface_get_stride(reference_cairo_surface);
-	source_data_size = stride * reference->height;
+	data = cairo_image_surface_get_data(reference_cairo_surface);
 
-	/* Check that the file's stride matches our assumption */
-	bpp = 4;
-	if (stride != bpp * reference->width) {
-		printf("Mismatched stride for screenshot reference image %s\n", fname);
-		cairo_surface_destroy(reference_cairo_surface);
-		free(reference);
-		return NULL;
-	}
+	/* The Cairo surface will own the data, so we keep it around. */
+	image = pixman_image_create_bits_no_clear(pixman_fmt,
+						  width, height, data, stride);
+	assert(image);
 
-	/* Allocate new buffer for our weston reference, and copy the data from
-	   the cairo surface so we can destroy it */
-	reference->data = zalloc(source_data_size);
-	if (reference->data == NULL) {
-		perror("zalloc reference data");
-		cairo_surface_destroy(reference_cairo_surface);
-		free(reference);
-		return NULL;
-	}
-	memcpy(reference->data,
-	       cairo_image_surface_get_data(reference_cairo_surface),
-	       source_data_size);
+	pixman_image_set_destroy_function(image, destroy_cairo_surface,
+					  reference_cairo_surface);
 
-	cairo_surface_destroy(reference_cairo_surface);
-	return reference;
+	converted = image_convert_to_a8r8g8b8(image);
+	pixman_image_unref(image);
+
+	return converted;
 }
 
-/** create_screenshot_surface()
- *
- *  Allocates and initializes a weston test surface for use in
- *  storing a screenshot of the client's output.  Establishes a
- *  shm backed wl_buffer for retrieving screenshot image data
- *  from the server, sized to match the client's output display.
- *
- *  @returns stack allocated surface image, which should be
- *  free'd when done using it.
- */
-struct surface *
-create_screenshot_surface(struct client *client)
-{
-	struct surface *screenshot;
-	screenshot = zalloc(sizeof *screenshot);
-	if (screenshot == NULL)
-		return NULL;
-	screenshot->wl_buffer = create_shm_buffer(client,
-						  client->output->width,
-						  client->output->height,
-						  &screenshot->data);
-	screenshot->height = client->output->height;
-	screenshot->width = client->output->width;
-
-	return screenshot;
-}
-
-/** capture_screenshot_of_output()
+/**
+ * Take screenshot of a single output
  *
  * Requests a screenshot from the server of the output that the
- * client appears on.  The image data returned from the server
- * can be accessed from the screenshot surface's data member.
+ * client appears on. This implies that the compositor goes through an output
+ * repaint to provide the screenshot before this function returns. This
+ * function is therefore both a server roundtrip and a wait for a repaint.
  *
- * @returns a new surface object, which should be free'd when no
- * longer needed.
+ * @returns A new buffer object, that should be freed with buffer_destroy().
  */
-struct surface *
+struct buffer *
 capture_screenshot_of_output(struct client *client)
 {
-	struct surface *screenshot;
+	struct buffer *buffer;
 
-	/* Create a surface to hold the screenshot */
-	screenshot = create_screenshot_surface(client);
+	buffer = create_shm_buffer_a8r8g8b8(client,
+					    client->output->width,
+					    client->output->height);
 
 	client->test->buffer_copy_done = 0;
 	weston_test_capture_screenshot(client->test->weston_test,
 				       client->output->wl_output,
-				       screenshot->wl_buffer);
+				       buffer->proxy);
 	while (client->test->buffer_copy_done == 0)
 		if (wl_display_dispatch(client->wl_display) < 0)
 			break;
@@ -1167,5 +1369,5 @@ capture_screenshot_of_output(struct client *client)
 	 * Protocol docs in the XML, comparison function docs in Doxygen style.
 	 */
 
-	return screenshot;
+	return buffer;
 }

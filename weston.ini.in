@@ -1,12 +1,15 @@
 [core]
-#modules=xwayland.so,cms-colord.so
+#modules=cms-colord.so
+#xwayland=true
 #shell=desktop-shell.so
 #gbm-format=xrgb2101010
+#require-input=true
 
 [shell]
 background-image=/usr/share/backgrounds/gnome/Aqua.jpg
 background-color=0xff002244
 background-type=tile
+clock-format=minutes
 panel-color=0x90ff0000
 locking=true
 animation=zoom
@@ -53,7 +56,7 @@ path=@libexecdir@/weston-keyboard
 
 #[output]
 #name=X1
-#mode=1024x768
+#mode=1024x768@60
 #transform=flipped-90
 
 #[libinput]

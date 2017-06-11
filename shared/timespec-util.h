@@ -49,6 +49,39 @@ timespec_sub(struct timespec *r,
 	}
 }
 
+/* Add a nanosecond value to a timespec
+ *
+ * \param r[out] result: a + b
+ * \param a[in] base operand as timespec
+ * \param b[in] operand in nanoseconds
+ */
+static inline void
+timespec_add_nsec(struct timespec *r, const struct timespec *a, int64_t b)
+{
+	r->tv_sec = a->tv_sec + (b / NSEC_PER_SEC);
+	r->tv_nsec = a->tv_nsec + (b % NSEC_PER_SEC);
+
+	if (r->tv_nsec >= NSEC_PER_SEC) {
+		r->tv_sec++;
+		r->tv_nsec -= NSEC_PER_SEC;
+	} else if (r->tv_nsec < 0) {
+		r->tv_sec--;
+		r->tv_nsec += NSEC_PER_SEC;
+	}
+}
+
+/* Add a millisecond value to a timespec
+ *
+ * \param r[out] result: a + b
+ * \param a[in] base operand as timespec
+ * \param b[in] operand in milliseconds
+ */
+static inline void
+timespec_add_msec(struct timespec *r, const struct timespec *a, int64_t b)
+{
+	return timespec_add_nsec(r, a, b * 1000000);
+}
+
 /* Convert timespec to nanoseconds
  *
  * \param a timespec
@@ -58,6 +91,45 @@ static inline int64_t
 timespec_to_nsec(const struct timespec *a)
 {
 	return (int64_t)a->tv_sec * NSEC_PER_SEC + a->tv_nsec;
+}
+
+/* Subtract timespecs and return result in nanoseconds
+ *
+ * \param a[in] operand
+ * \param b[in] operand
+ * \return to_nanoseconds(a - b)
+ */
+static inline int64_t
+timespec_sub_to_nsec(const struct timespec *a, const struct timespec *b)
+{
+	struct timespec r;
+	timespec_sub(&r, a, b);
+	return timespec_to_nsec(&r);
+}
+
+/* Convert timespec to milliseconds
+ *
+ * \param a timespec
+ * \return milliseconds
+ *
+ * Rounding to integer milliseconds happens always down (floor()).
+ */
+static inline int64_t
+timespec_to_msec(const struct timespec *a)
+{
+	return (int64_t)a->tv_sec * 1000 + a->tv_nsec / 1000000;
+}
+
+/* Subtract timespecs and return result in milliseconds
+ *
+ * \param a[in] operand
+ * \param b[in] operand
+ * \return to_milliseconds(a - b)
+ */
+static inline int64_t
+timespec_sub_to_msec(const struct timespec *a, const struct timespec *b)
+{
+	return timespec_sub_to_nsec(a, b) / 1000000;
 }
 
 /* Convert milli-Hertz to nanoseconds

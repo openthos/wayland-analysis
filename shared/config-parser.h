@@ -30,6 +30,8 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+
 #define WESTON_CONFIG_FILE_ENV_VAR "WESTON_CONFIG_FILE"
 
 enum config_key_type {
@@ -84,6 +86,10 @@ int
 weston_config_section_get_uint(struct weston_config_section *section,
 			       const char *key,
 			       uint32_t *value, uint32_t default_value);
+int
+weston_config_section_get_color(struct weston_config_section *section,
+				const char *key,
+				uint32_t *color, uint32_t default_color);
 int
 weston_config_section_get_double(struct weston_config_section *section,
 				 const char *key,
