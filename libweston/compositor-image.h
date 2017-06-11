@@ -61,7 +61,8 @@ struct weston_image_backend_config {
 	struct weston_backend_config base;
 
 	char *device;
-
+	
+	int use_gl;
 	/** Callback used to configure input devices.
 	 *
 	 * This function will be called by the backend when a new input device

@@ -43,6 +43,9 @@
 #include <linux/input.h>
 #include <dlfcn.h>
 
+#include <gbm.h>
+#include "gl-renderer.h"
+
 #include "shared/helpers.h"
 #include "compositor.h"
 #include "compositor-image.h"
@@ -60,6 +63,10 @@ struct image_backend {
 	struct socket_input input;
 	uint32_t output_transform;
 	struct wl_listener session_listener;
+
+	int use_pixman;
+	int drm_fd; // For GBM
+    struct gbm_device *gbm;
 };
 
 struct image_screeninfo {
@@ -92,8 +99,12 @@ struct image_output {
 	/* pixman details. */
 	pixman_image_t *hw_surface;
 	uint8_t depth;
-	int32_t scale;//new add by ipfgo,copy from x11 ,20170524
+	int32_t scale;
+
+	struct gbm_surface *surface;
 };
+
+struct gl_renderer_interface *gl_renderer;
 
 static const char default_seat[] = "seat0";
 
@@ -105,7 +116,6 @@ static struct image_screeninfo global_screeninfo = {
 	.pixel_format = PIXMAN_a8b8g8r8,
 	.refresh_rate = 60000,
 };
-
 
 static inline struct image_output *
 to_image_output(struct weston_output *base)
@@ -128,16 +138,91 @@ image_output_start_repaint_loop(struct weston_output *output)
 	weston_output_finish_frame(output, &ts, WP_PRESENTATION_FEEDBACK_INVALID);
 }
 
+/*save_views*/
+static char *view_filter = NULL;
+
+static void
+save_surface(struct weston_surface *surface, void *pixels)
+{
+	int width, height;
+	char desc[512];
+	const size_t bytespp = 4; /* PIXMAN_a8b8g8r8 */
+	size_t sz;
+	int ret;
+
+	if (!surface) return;
+
+	weston_surface_get_content_size(surface, &width, &height);
+
+	if (!surface->get_label ||
+	    surface->get_label(surface, desc, sizeof(desc)) < 0)
+		return;
+
+	weston_log("find surface with label: %s\n", desc);
+
+	if (strstr(desc, view_filter) == 0) // only save view matching filter
+	    return;
+
+	weston_log("surface screenshot of %p: '%s', %dx%d\n",
+		   surface, desc, width, height);
+
+	sz = width * bytespp * height;
+	if (sz == 0) {
+		weston_log("no content for %p\n", surface);
+		return;
+	}
+
+	ret = weston_surface_copy_content(surface, pixels, sz,
+					  0, 0, width, height);
+	if (ret < 0) {
+		weston_log("shooting surface %p failed\n", surface);
+	}
+}
+
+static void
+save_views(struct weston_output *output, void *pixels)
+{
+	struct weston_compositor *compositor = output->compositor;
+	struct weston_view *view;
+
+	wl_list_for_each_reverse(view, &compositor->view_list, link) {
+	    save_surface(view->surface, pixels);
+	}
+}
+/*save_views*/
+
 static int
 image_output_repaint(struct weston_output *base, pixman_region32_t *damage,
 		     void *repaint_data)
 {
 	struct image_output *output = to_image_output(base);
+	struct image_backend *b = output->backend;
 	struct weston_compositor *ec = output->base.compositor;
 
-	/* Repaint the damaged region onto the back buffer. */
-	pixman_renderer_output_set_buffer(base, output->hw_surface);
-	ec->renderer->repaint_output(base, damage);
+	if (b->use_pixman) {
+		/* Repaint the damaged region onto the back buffer. */
+		pixman_renderer_output_set_buffer(base, output->hw_surface);
+		ec->renderer->repaint_output(base, damage);
+	} else {
+		ec->renderer->repaint_output(base, damage);
+
+		ec->renderer->read_pixels(base,
+				global_screeninfo.pixel_format, output->fb_tmp,
+				0, 0, global_screeninfo.x_resolution,
+				global_screeninfo.y_resolution);
+
+		for (int i = 0, j = global_screeninfo.y_resolution - 1; j >= 0; i++, j--) {
+		    memcpy(output->fb + i * global_screeninfo.line_length,
+			   output->fb_tmp + j * global_screeninfo.line_length,
+			   global_screeninfo.line_length);
+		}
+	}
+
+	/*save view*/
+	if (view_filter) {
+	    save_views(base, output->fb);
+	}
+	/*save view*/
 
 	/* Update the damage region. */
 	pixman_region32_subtract(&ec->primary_plane.damage,
@@ -304,6 +389,43 @@ image_frame_buffer_destroy(struct image_output *output)
 static void image_output_destroy(struct weston_output *base);
 static void image_output_disable(struct weston_output *base);
 
+/* Init output state that depends on gl or gbm */
+static int
+image_output_init_egl(struct image_output *output, struct image_backend *b)
+{
+	EGLint format[2] = {
+		GBM_FORMAT_XRGB8888,
+		GBM_FORMAT_ARGB8888
+	};
+	int n_formats = 1;
+
+	output->surface = gbm_surface_create(b->gbm,
+			output->base.current_mode->width,
+			output->base.current_mode->height,
+			format[0],
+			GBM_BO_USE_RENDERING);
+	if (!output->surface) {
+		weston_log("failed to create gbm surface\n");
+		return -1;
+	}
+
+	if (format[1])
+		n_formats = 2;
+	if (gl_renderer->output_window_create(&output->base,
+					      (EGLNativeWindowType)output->surface,
+					      output->surface,
+					      gl_renderer->opaque_attribs,
+					      format,
+					      n_formats) < 0) {
+		weston_log("failed to create gl renderer output state\n");
+		gbm_surface_destroy(output->surface);
+		return -1;
+	}
+	
+	return 0;
+}
+
+
 static int
 image_output_enable(struct weston_output *base)
 {
@@ -327,8 +449,14 @@ image_output_enable(struct weston_output *base)
 	output->base.start_repaint_loop = image_output_start_repaint_loop;
 	output->base.repaint = image_output_repaint;
 
-	if (pixman_renderer_output_create(&output->base) < 0)
-		goto out_hw_surface;
+	if (backend->use_pixman) {
+		if (pixman_renderer_output_create(&output->base) < 0)
+			goto out_hw_surface;
+	} else {
+		if (image_output_init_egl(output, backend) < 0) {
+			goto out_hw_surface;
+		}
+	}
 
 	loop = wl_display_get_event_loop(backend->compositor->wl_display);
 	output->finish_frame_timer =
@@ -443,15 +571,19 @@ static void
 image_output_destroy(struct weston_output *base)
 {
 	struct image_output *output = to_image_output(base);
+	struct image_backend *backend = output->backend;
 
 	weston_log("Destroying image output.\n");
 
 	/* Close the frame buffer. */
 	image_output_disable(base);
 
-	if (base->renderer_state != NULL)
-		pixman_renderer_output_destroy(base);
-
+	if (backend->use_pixman) {
+		if (base->renderer_state != NULL)
+			pixman_renderer_output_destroy(base);
+	} else {
+		gl_renderer->output_destroy(base);
+	}
 	/* Remove the output. */
 	weston_output_destroy(&output->base);
 
@@ -519,9 +651,11 @@ image_output_reenable(struct image_backend *backend,
 	}
 
 	/* Map the device if it has the same details as before. */
-	if (image_frame_buffer_map(output, fb_fd) < 0) {
-		weston_log("Mapping frame buffer failed.\n");
-		goto err;
+	if (backend->use_pixman) {
+		if (image_frame_buffer_map(output, fb_fd) < 0) {
+			weston_log("Mapping frame buffer failed.\n");
+			goto err;
+		}
 	}
 
 	return 0;
@@ -537,8 +671,11 @@ static void
 image_output_disable(struct weston_output *base)
 {
 	struct image_output *output = to_image_output(base);
+	struct image_backend *backend = output->backend;
 
 	weston_log("Disabling image output.\n");
+
+	if ( ! backend->use_pixman) return;
 
 	if (output->hw_surface != NULL) {
 		pixman_image_unref(output->hw_surface);
@@ -611,6 +748,89 @@ image_restore(struct weston_compositor *compositor)
 	weston_launcher_restore(compositor->launcher);
 }
 
+static int
+image_backend_create_gl_renderer(struct image_backend *b)
+{
+	EGLint format[3] = {
+		GBM_FORMAT_XRGB8888,
+		GBM_FORMAT_ARGB8888,
+		0,
+	};
+	int n_formats = 2;
+
+	if (format[1])
+		n_formats = 3;
+	if (gl_renderer->display_create(b->compositor,
+					EGL_PLATFORM_GBM_KHR,
+					(void *)b->gbm,
+					NULL,
+					gl_renderer->opaque_attribs,
+					format,
+					n_formats) < 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static struct gbm_device *
+create_gbm_device(int fd)
+{
+	struct gbm_device *gbm;
+
+	gl_renderer = weston_load_module("gl-renderer.so",
+					 "gl_renderer_interface");
+	if (!gl_renderer)
+		return NULL;
+
+	/* GBM will load a dri driver, but even though they need symbols from
+	 * libglapi, in some version of Mesa they are not linked to it. Since
+	 * only the gl-renderer module links to it, the call above won't make
+	 * these symbols globally available, and loading the DRI driver fails.
+	 * Workaround this by dlopen()'ing libglapi with RTLD_GLOBAL. */
+	dlopen("libglapi.so.0", RTLD_LAZY | RTLD_GLOBAL);
+
+	gbm = gbm_create_device(fd);
+
+	return gbm;
+}
+
+static int
+init_egl(struct image_backend *b)
+{
+	b->gbm = create_gbm_device(b->drm_fd);
+
+	if (!b->gbm)
+		return -1;
+
+	if (image_backend_create_gl_renderer(b) < 0) {
+		gbm_device_destroy(b->gbm);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+init_drm(struct image_backend *b, const char* filename)
+{
+	int fd;
+
+	fd = weston_launcher_open(b->compositor->launcher, filename, O_RDWR);
+	if (fd < 0) {
+		/* Probably permissions error */
+		weston_log("couldn't open %s, skipping\n",
+				filename);
+		return -1;
+	}
+
+	weston_log("using %s\n", filename);
+
+	b->drm_fd = fd;
+
+	return 0;
+}
+
 static const struct weston_image_output_api api = {
 	image_output_set_size,
 };
@@ -650,11 +870,23 @@ image_backend_create(struct weston_compositor *compositor,
 	backend->base.restore = image_restore;
 
 	backend->prev_state = WESTON_COMPOSITOR_ACTIVE;
+	backend->use_pixman = !param->use_gl;
 
 	weston_setup_vt_switch_bindings(compositor);
 
-	if (pixman_renderer_init(compositor) < 0)
-		goto out_launcher;
+	if (backend->use_pixman) {
+		if (pixman_renderer_init(compositor) < 0)
+			goto out_launcher;
+	} else {
+		if (init_drm(backend, "/dev/dri/card0") < 0) {
+			weston_log("failed to initialize kms\n");
+			goto out_launcher;
+		}
+		if (init_egl(backend) < 0) {
+			weston_log("failed to initialize egl\n");
+			goto out_launcher;
+		}
+	}
 
 	if (image_output_create(backend, param->device) < 0)
 		goto out_launcher;
@@ -689,6 +921,7 @@ config_init_to_defaults(struct weston_image_backend_config *config)
 	/* TODO: Ideally, available frame buffers should be enumerated using
 	 * udev, rather than passing a device node in as a parameter. */
 	config->device = "/tmp/image.bin"; /* default frame buffer */
+	config->use_gl = 1; /*set use_gl as default*/
 }
 
 WL_EXPORT int
